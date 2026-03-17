@@ -1,0 +1,9 @@
+models/
+.env
+__pycache__/
+*.pyc
+.DS_Store
+*.pkl
+*.pt
+data/raw/
+data/processed/
