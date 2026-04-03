@@ -1,0 +1,39 @@
+services:
+  batch-pipeline:
+    build: .
+    entrypoint: ["python", "batch_pipeline.py"]
+    volumes:
+      - ./artifacts:/app/artifacts
+    command:
+      - --dataset
+      - /app/artifacts/ocw_dataset.parquet
+      - --feedback
+      - /app/artifacts/production_feedback.jsonl
+      - --output-dir
+      - /app/artifacts/versions
+      - --version
+      - v1
+
+  data-generator:
+    build: .
+    entrypoint: ["python", "data_generator.py"]
+    volumes:
+      - ./artifacts:/app/artifacts
+    command:
+      - --input
+      - /app/artifacts/ocw_dataset.parquet
+      - --output
+      - /app/artifacts/production_feedback.jsonl
+
+  ocw-pipeline:
+    build: .
+    volumes:
+      - ./:/app/workspace:ro
+      - ./artifacts:/app/artifacts
+    command:
+      - --root
+      - /app/workspace
+      - --output
+      - /app/artifacts/ocw_dataset.parquet
+      - --summary-output
+      - /app/artifacts/ocw_summary.json

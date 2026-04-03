@@ -1,0 +1,30 @@
+{
+  "version": "v1",
+  "created_at": "2026-04-03T18:07:23Z",
+  "train": {
+    "num_rows": 362,
+    "course_ids": [
+      "18.01",
+      "5.111SC",
+      "6.006",
+      "6.042J"
+    ],
+    "label_distribution": {
+      "Lecture Notes": 176,
+      "Problem Set": 96,
+      "Reading": 50,
+      "Exam": 40
+    }
+  },
+  "eval": {
+    "num_rows": 40,
+    "course_ids": [
+      "6.034"
+    ],
+    "label_distribution": {
+      "Exam": 20,
+      "Lecture Notes": 10,
+      "Reading": 10
+    }
+  }
+}
