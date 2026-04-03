@@ -21,7 +21,7 @@ case "${MODEL}" in
     ;;
 esac
 
-if [ -z "${MLFLOW_TRACKING_URI:-}"; then
+if [ -z "${MLFLOW_TRACKING_URI:-}" ]; then
   echo "Please set MLFLOW_TRACKING_URI, e.g. http://<CHAMELEON_VM_IP>:5000"
   exit 1
 fi
