@@ -20,3 +20,4 @@ psycopg2-binary==2.9.9       # PostgreSQL connection
 # Utilities
 python-dotenv==1.0.1         # reads .env file for secrets
 pydantic==2.6.4              # data validation (FastAPI uses this under the hood)
+onnxruntime==1.17.3
