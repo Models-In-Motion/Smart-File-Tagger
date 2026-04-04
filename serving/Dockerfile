@@ -47,18 +47,17 @@ RUN pip install --no-cache-dir -r requirements.txt
 # and fails if there's no internet on the Chameleon VM.
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 
+# ── ONNX encoder (predictor USE_ONNX=True expects /models/sbert_onnx.onnx) ──
+# Export runs at build time so the image is self-contained (no manual export_onnx.py).
+COPY export_onnx.py .
+RUN mkdir -p /models \
+    && ONNX_EXPORT_DIR=/models SKIP_ONNX_BENCHMARK=1 python export_onnx.py \
+    && rm -f export_onnx.py
+
 # ── Copy application code ─────────────────────────────────────────────────────
 COPY app/ .
 
-# ── Model files directory ─────────────────────────────────────────────────────
-# We create the /models directory inside the container.
-# In production, this is a Docker volume mount — Vedant's trained model
-# files are placed here without rebuilding the image.
-# For now (stub mode), it stays empty and the stub predictor runs instead.
-RUN mkdir -p /models
-
-# Copy the random-weight model files into the image
-# In production these will be replaced by Vedant's trained models
+# ── LightGBM + label encoder (generate locally with create_fake_model.py if missing)
 COPY models/ /models/
 
 # ── Port ──────────────────────────────────────────────────────────────────────

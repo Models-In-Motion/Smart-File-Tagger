@@ -25,7 +25,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from extractor import extract_text
 from predictor import Predictor
@@ -109,6 +109,8 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 
 class FeedbackRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     file_id:            str
     user_id:            str
     predicted_tag:      str
