@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
  && rm -rf /var/lib/apt/lists/*
 
-# Python deps
+# Lightweight Python deps only (no torch/sentence-transformers)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -17,7 +17,6 @@ COPY data_generator.py .
 COPY batch_pipeline.py .
 COPY online_features.py .
 COPY synthetic_expansion.py .
-COPY qdrant_demo.py .
 COPY mock_predict_server.py .
 
 ENTRYPOINT ["python", "build_ocw_dataset.py"]

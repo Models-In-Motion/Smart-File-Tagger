@@ -5,7 +5,9 @@ services:
       - "6333:6333"
 
   qdrant-demo:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.qdrant
     entrypoint: ["python", "qdrant_demo.py"]
     volumes:
       - ./artifacts:/app/artifacts
