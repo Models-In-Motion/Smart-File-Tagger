@@ -1,1 +1,17 @@
-{"label": "Lecture Notes"}
+{
+  "file_id": "8821",
+  "user_id": "nc_user_vd2477",
+  "predicted_tag": "Lecture Notes",
+  "confidence": 0.8241,
+  "action": "auto_tag",
+  "category_type": "fixed_baseline",
+  "top_predictions": [
+    {"tag": "Lecture Notes", "confidence": 0.8241},
+    {"tag": "Reading",       "confidence": 0.0912},
+    {"tag": "Other",         "confidence": 0.0847}
+  ],
+  "explanation": null,
+  "model_version": "lgbm_v1",
+  "latency_ms": 142.3,
+  "timestamp": "2026-04-04T02:38:59Z"
+}

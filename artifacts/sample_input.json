@@ -1,1 +1,10 @@
-{"filename": "9aa6eea60d8e3e142f4c54ffe725e78f_TpWQlKHPyJ4.pdf", "file_size_bytes": 48925, "text_extraction_method": "pdftotext_failed", "extracted_text": "", "char_count": 0, "word_count": 0, "processed_at": "2026-04-03T18:03:39Z"}
+{
+  "_note": "File bytes sent as multipart/form-data. Fields below are the form fields sent to POST /predict",
+  "user_id": "nc_user_vd2477",
+  "file_id": "8821",
+  "filename": "18.01_lec31.pdf",
+  "mime_type": "application/pdf",
+  "file_size_bytes": 48925,
+  "nextcloud_path": "/vd2477/files/Documents/Calculus/18.01_lec31.pdf",
+  "upload_timestamp": "2026-04-04T02:38:59Z"
+}
