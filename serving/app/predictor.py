@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 USE_STUB_MODEL = False   # True = stub mode, False = real model
-USE_ONNX       = False   # True = ONNX SBERT, False = PyTorch SBERT
+USE_ONNX       = True   # True = ONNX SBERT, False = PyTorch SBERT
                           # Only used when USE_STUB_MODEL = False
 
 MODEL_PATH         = Path(os.getenv("MODEL_PATH",         "/models/lgbm_classifier_v1.pkl"))
