@@ -1,0 +1,22 @@
+# Core serving
+fastapi==0.110.0
+uvicorn[standard]==0.29.0
+python-multipart==0.0.9      # needed for FastAPI to accept file uploads
+
+# Text extraction
+pdfminer.six==20221105       # extracts text from PDFs
+Pillow==10.2.0               # opens image files
+pytesseract==0.3.10          # OCR — reads text from images (needs tesseract installed)
+
+# ML model
+sentence-transformers==2.6.1 # SBERT — converts text into embeddings
+lightgbm==4.3.0              # the actual classifier
+numpy==1.26.4
+scikit-learn==1.4.1.post1    # for label encoding + cosine similarity
+
+# Database
+psycopg2-binary==2.9.9       # PostgreSQL connection
+
+# Utilities
+python-dotenv==1.0.1         # reads .env file for secrets
+pydantic==2.6.4              # data validation (FastAPI uses this under the hood)

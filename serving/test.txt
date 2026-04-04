@@ -1,0 +1,1 @@
+Problem Set 3 - Due Friday at 11:59pm. Question 1: Show that L is undecidable. Question 2: Prove the halting problem.
