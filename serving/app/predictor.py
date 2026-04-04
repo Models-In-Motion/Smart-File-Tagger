@@ -49,7 +49,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # Set this to False once Vedant delivers the trained model
-USE_STUB_MODEL = True
+USE_STUB_MODEL = False
 
 # Path to the trained LightGBM model file
 # This will be a Docker volume mount in production

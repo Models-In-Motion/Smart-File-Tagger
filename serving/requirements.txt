@@ -11,8 +11,8 @@ pytesseract==0.3.10          # OCR — reads text from images (needs tesseract i
 # ML model
 sentence-transformers==2.6.1 # SBERT — converts text into embeddings
 lightgbm==4.3.0              # the actual classifier
-numpy==1.26.4
-scikit-learn==1.4.1.post1    # for label encoding + cosine similarity
+numpy==2.0.2                  # NumPy 2 unpickles models saved with numpy._core (local venv default)
+scikit-learn==1.5.2           # NumPy 2–compatible; label encoder + similarity
 
 # Database
 psycopg2-binary==2.9.9       # PostgreSQL connection

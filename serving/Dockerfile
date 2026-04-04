@@ -57,6 +57,10 @@ COPY app/ .
 # For now (stub mode), it stays empty and the stub predictor runs instead.
 RUN mkdir -p /models
 
+# Copy the random-weight model files into the image
+# In production these will be replaced by Vedant's trained models
+COPY models/ /models/
+
 # ── Port ──────────────────────────────────────────────────────────────────────
 # Document which port the app listens on.
 # This doesn't actually open the port — docker run -p 8000:8000 does that.
