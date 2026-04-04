@@ -16,6 +16,7 @@ COPY build_ocw_dataset.py .
 COPY data_generator.py .
 COPY batch_pipeline.py .
 COPY online_features.py .
+COPY synthetic_expansion.py .
 
 ENTRYPOINT ["python", "build_ocw_dataset.py"]
 CMD ["--help"]

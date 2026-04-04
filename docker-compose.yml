@@ -1,4 +1,19 @@
 services:
+  synthetic-expansion:
+    build: .
+    entrypoint: ["python", "synthetic_expansion.py"]
+    volumes:
+      - ./artifacts:/app/artifacts
+    command:
+      - --input
+      - /app/artifacts/ocw_dataset.parquet
+      - --output
+      - /app/artifacts/ocw_dataset_expanded.parquet
+      - --multiplier
+      - "5"
+      - --seed
+      - "42"
+
   batch-pipeline:
     build: .
     entrypoint: ["python", "batch_pipeline.py"]
@@ -6,7 +21,7 @@ services:
       - ./artifacts:/app/artifacts
     command:
       - --dataset
-      - /app/artifacts/ocw_dataset.parquet
+      - /app/artifacts/ocw_dataset_expanded.parquet
       - --feedback
       - /app/artifacts/production_feedback.jsonl
       - --output-dir
