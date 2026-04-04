@@ -47,16 +47,26 @@ services:
       - --version
       - v1
 
+  mock-predict:
+    build: .
+    entrypoint: ["python", "mock_predict_server.py"]
+    ports:
+      - "8000:8000"
+
   data-generator:
     build: .
     entrypoint: ["python", "data_generator.py"]
     volumes:
       - ./artifacts:/app/artifacts
+    depends_on:
+      - mock-predict
     command:
       - --input
       - /app/artifacts/ocw_dataset.parquet
       - --output
       - /app/artifacts/production_feedback.jsonl
+      - --predict-url
+      - http://mock-predict:8000/predict
 
   ocw-pipeline:
     build: .
