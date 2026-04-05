@@ -1,8 +1,8 @@
 {
   "version": "v1",
-  "created_at": "2026-04-03T18:07:23Z",
+  "created_at": "2026-04-05T02:31:46Z",
   "train": {
-    "num_rows": 362,
+    "num_rows": 2167,
     "course_ids": [
       "18.01",
       "5.111SC",
@@ -10,21 +10,21 @@
       "6.042J"
     ],
     "label_distribution": {
-      "Lecture Notes": 176,
-      "Problem Set": 96,
-      "Reading": 50,
-      "Exam": 40
+      "Lecture Notes": 1056,
+      "Problem Set": 576,
+      "Reading": 300,
+      "Exam": 235
     }
   },
   "eval": {
-    "num_rows": 40,
+    "num_rows": 240,
     "course_ids": [
       "6.034"
     ],
     "label_distribution": {
-      "Exam": 20,
-      "Lecture Notes": 10,
-      "Reading": 10
+      "Exam": 120,
+      "Lecture Notes": 60,
+      "Reading": 60
     }
   }
 }
