@@ -41,9 +41,8 @@ log = logging.getLogger(__name__)
 # Configuration — change these two flags to switch modes
 # ---------------------------------------------------------------------------
 
-USE_STUB_MODEL = False   # True = stub mode, False = real model
-USE_ONNX       = True   # True = ONNX SBERT, False = PyTorch SBERT
-                          # Only used when USE_STUB_MODEL = False
+USE_STUB_MODEL = os.getenv("USE_STUB_MODEL", "false").lower() == "true"
+USE_ONNX       = os.getenv("USE_ONNX", "false").lower() == "true"
 
 MODEL_PATH         = Path(os.getenv("MODEL_PATH",         "/models/lgbm_classifier_v1.pkl"))
 LABEL_ENCODER_PATH = Path(os.getenv("LABEL_ENCODER_PATH", "/models/label_encoder.pkl"))
