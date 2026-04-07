@@ -257,7 +257,7 @@ class Predictor:
             text,
             return_tensors="np",
             max_length=128,
-            padding="max_length",
+            padding=True,
             truncation=True,
         )
 
