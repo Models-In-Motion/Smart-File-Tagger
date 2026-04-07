@@ -269,5 +269,11 @@ class SmartTaggerDeployment:
 
 app = SmartTaggerDeployment.bind()
 
+# Replace your current serve.run call with this:
 if __name__ == "__main__":
-    serve.run(app, host="0.0.0.0", port=8100)
+    # Initialize serve with the desired host and port
+    serve.start(
+        http_options={"host": "0.0.0.0", "port": 8100}
+    )
+    # Deploy the application
+    serve.run(app)
