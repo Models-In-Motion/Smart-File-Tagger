@@ -72,20 +72,22 @@ print(f"  input_ids shape: {input_ids.shape}")
 onnx_path = OUT_DIR / "sbert_onnx.onnx"
 print(f"Step 3 — Exporting to {onnx_path}...")
 
-torch.onnx.export(
-    transformer,
-    (input_ids, attention_mask),
-    str(onnx_path),
-    input_names  = ["input_ids", "attention_mask"],
-    output_names = ["last_hidden_state"],
-    dynamic_axes = {
-        "input_ids":        {0: "batch_size", 1: "sequence_length"},
-        "attention_mask":   {0: "batch_size", 1: "sequence_length"},
-        "last_hidden_state":{0: "batch_size", 1: "sequence_length"},
-    },
-    opset_version   = 14,
-    do_constant_folding = True,   # fold constant ops for speed
-)
+with torch.no_grad():
+    torch.onnx.export(
+        transformer,
+        (input_ids, attention_mask),
+        str(onnx_path),
+        input_names     = ["input_ids", "attention_mask"],
+        output_names    = ["last_hidden_state"],
+        dynamic_axes    = {
+            "input_ids":         {0: "batch_size", 1: "sequence_length"},
+            "attention_mask":    {0: "batch_size", 1: "sequence_length"},
+            "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
+        },
+        opset_version       = 17,
+        do_constant_folding = True,
+        dynamo              = False,   # force legacy exporter — exports full weights
+    )
 print(f"  Saved: {onnx_path} ({onnx_path.stat().st_size / 1024 / 1024:.1f} MB)")
 
 # ---------------------------------------------------------------------------
