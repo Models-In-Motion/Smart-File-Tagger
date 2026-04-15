@@ -257,6 +257,30 @@ Source: [QuickSign/ocrized-text-dataset](https://github.com/QuickSign/ocrized-te
 
 ---
 
+## Data pipeline operations (merged from data branch)
+
+The data branch adds a concrete OCW-oriented pipeline path for generating training-ready artifacts and simulated feedback. The canonical ETL entrypoint is:
+
+- `build_ocw_dataset.py` (primary/canonical ETL)
+- `data_generator.py` (simulated production feedback JSONL)
+- `batch_pipeline.py` (versioned train/eval split with leakage-safe partitioning)
+- `online_features.py` (single-document online-path feature extraction)
+- `download_ocw_archives.py` (polite OCW archive downloader/extractor)
+- `etl_ocw.py` (legacy helper kept for backward compatibility)
+
+Typical local run order:
+
+```bash
+python build_ocw_dataset.py --root . --output artifacts/ocw_dataset.parquet --summary-output artifacts/ocw_summary.json --text-backend auto --min-text-chars 200
+python data_generator.py --input artifacts/ocw_dataset.parquet --output artifacts/production_feedback.jsonl --num-events 500 --seed 42
+python batch_pipeline.py --dataset artifacts/ocw_dataset.parquet --feedback artifacts/production_feedback.jsonl --output-dir artifacts/versions --version v1 --eval-ratio 0.2 --seed 42
+python online_features.py path/to/file.pdf --output artifacts/sample_input.json
+```
+
+This keeps the repository-level product framing while preserving the data team’s execution details for ETL, feedback simulation, and training-set preparation.
+
+---
+
 ## License
 
 MIT

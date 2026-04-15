@@ -1,9 +1,44 @@
+# OS / editor
+.DS_Store
+.claude/
+
+# Local generated manifests
+FULL_FILE_MANIFEST.txt
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# App/model artifacts
 models/
 .env
-__pycache__/
-*.pyc
-.DS_Store
 *.pkl
 *.pt
+
+# Data working directories
 data/raw/
 data/processed/
+ocw_downloads/
+ocw_courses/
+
+# Large local OCW course dumps
+18-06sc-fall-2011/
+18.01-fall-2006/
+5.111sc-fall-2014/
+6.006-spring-2020/
+6.034-fall-2010/
+6.042j-spring-2015/
+
+# Generated datasets and logs (root-level legacy files only)
+dataset.parquet
+dataset_all.parquet
+
+# Artifacts — track specific files, ignore large/generated ones
+artifacts/demo_logs/
+artifacts/production_feedback.jsonl
