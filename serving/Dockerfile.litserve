@@ -1,0 +1,46 @@
+# Dockerfile.litserve — Smart File Tagger with LitServe
+# Krish Jani (kj2743) — Serving Lead
+# ECE-GY 9183 MLOps, Spring 2026
+#
+# Builds a separate image that serves the same prediction pipeline
+# using LitServe instead of FastAPI. The key difference is LitServe's
+# native dynamic request batching via max_batch_size parameter.
+#
+# Build:  docker build -f Dockerfile.litserve -t smart-tagger-litserve .
+# Run:    docker run -p 8100:8100 --name litserve smart-tagger-litserve
+
+FROM python:3.10-slim
+
+RUN apt-get update && apt-get install -y \
+    libgomp1 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install dependencies
+COPY requirements_litserve.txt .
+RUN pip install --no-cache-dir -r requirements_litserve.txt
+
+# Pre-download SBERT model + tokenizer so container works offline
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+RUN python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')"
+
+# Export ONNX model at build time
+COPY export_onnx.py .
+RUN mkdir -p /models \
+    && ONNX_EXPORT_DIR=/models SKIP_ONNX_BENCHMARK=1 python export_onnx.py \
+    && rm -f export_onnx.py
+
+# Copy LitServe app
+COPY litserve/litserve_app.py .
+
+# Copy LightGBM + label encoder
+COPY models/ /models/
+
+EXPOSE 8100
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=45s --retries=3 \
+    CMD curl -f http://localhost:8100/health || exit 1
+
+CMD ["python", "litserve_app.py"]

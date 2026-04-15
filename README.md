@@ -83,20 +83,6 @@ smart-file-tagger/
 │   ├── Dockerfile
 │   └── requirements.txt
 │
-├── nextcloud-app/            # Nextcloud App Framework plugin (Krish)
-│   ├── appinfo/
-│   │   ├── info.xml          # App metadata + Nextcloud version compatibility
-│   │   └── routes.php        # URL routing for all app endpoints
-│   ├── lib/Controller/
-│   │   ├── TagController.php      # Receives Flow webhook, writes tags, pushes notifications
-│   │   └── CategoryController.php # Proxies category create/delete to sidecar
-│   ├── js/
-│   │   └── smart-tagger.js   # Accept/reject suggestion banner in Files sidebar
-│   ├── css/
-│   │   └── smart-tagger.css  # Styles — uses Nextcloud CSS variables for theme support
-│   └── templates/
-│       └── category-manager.php  # "Create your own categories" settings page
-│
 ├── models/                   # Versioned model artifacts (git-ignored, Docker volume)
 │   ├── sbert_classifier_v1.pkl
 │   ├── prototype_store.json
@@ -212,48 +198,7 @@ The sidecar is designed to never degrade Nextcloud's core experience:
 
 ---
 
-## Nextcloud integration
-
-Smart File Tagger integrates with Nextcloud through the official **App Framework** — no forking or patching of Nextcloud core is required.
-
-### How it works
-
-1. Nextcloud's built-in **Flow** engine fires a webhook to the PHP `TagController` on every file upload
-2. `TagController` proxies the request to the Python sidecar and receives a tag + confidence score
-3. If confidence > 0.85, the tag is written immediately via Nextcloud's `ISystemTagManager`
-4. If confidence is 0.50–0.85, a notification is pushed to the user with Accept / Reject buttons
-5. The user's decision is logged as feedback and forwarded to the sidecar for retraining
-
-### Installing the app
-
-```bash
-# Copy the app into your Nextcloud apps directory
-cp -r nextcloud-app/ /var/www/nextcloud/apps/smartfiletagger
-
-# Enable the app via Nextcloud admin panel or CLI
-php /var/www/nextcloud/occ app:enable smartfiletagger
-```
-
-### Configuring the Flow webhook
-
-In Nextcloud: **Settings → Flow → Add new flow**
-- Trigger: "File created"
-- Action: "Send webhook"
-- URL: `http://sidecar:8000/predict` (or your sidecar's address)
-
-### What Nextcloud already provides (no custom work needed)
-- Displaying tags on files in the Files UI
-- Letting users manually add / remove tags
-- Tag-based search and filtering
-
-### What the Nextcloud app adds
-- Suggestion banner with Accept / Reject in the file detail sidebar
-- LLM explanation panel when the model is uncertain
-- "Create your own category" settings page with example file picker
-
----
-
-
+## Getting started
 
 ### Prerequisites
 - Docker and Docker Compose
@@ -297,7 +242,7 @@ cd data && pytest tests/
 
 | Role | Person | Owns |
 |---|---|---|
-| Serving Lead | Krish | `serving/` — FastAPI sidecar, latency, fail-open design. `nextcloud-app/` — PHP controllers, JS suggestion banner, category manager UI |
+| Serving Lead | Krish | `serving/` — FastAPI sidecar, latency, fail-open design |
 | Training Lead | Vedant | `training/` — SBERT classifier, retrain pipeline, model registry |
 | Data Lead | Viral | `data/` — preprocessing, PostgreSQL schema, feedback export |
 | All members | Joint | `infra/`, `docker-compose.yml`, integration, demo |

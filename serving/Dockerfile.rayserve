@@ -1,0 +1,47 @@
+# Dockerfile.rayserve — Smart File Tagger with Ray Serve
+# Krish Jani (kj2743) — Serving Lead
+# ECE-GY 9183 MLOps, Spring 2026
+#
+# This builds a separate image that serves the same /predict API
+# using Ray Serve instead of FastAPI. The key difference is Ray Serve's
+# native @serve.batch decorator, which automatically batches concurrent
+# requests into a single SBERT forward pass.
+#
+# Build:  docker build -f Dockerfile.rayserve -t smart-tagger-rayserve .
+# Run:    docker run -p 8100:8100 --name rayserve smart-tagger-rayserve
+
+FROM python:3.10-slim
+
+RUN apt-get update && apt-get install -y \
+    libgomp1 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install dependencies — Ray Serve + same ML stack as FastAPI image
+COPY requirements_ray.txt .
+RUN pip install --no-cache-dir -r requirements_ray.txt
+
+# Pre-download SBERT model + tokenizer
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+RUN python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')"
+
+# Export ONNX model at build time
+COPY export_onnx.py .
+RUN mkdir -p /models \
+    && ONNX_EXPORT_DIR=/models SKIP_ONNX_BENCHMARK=1 python export_onnx.py \
+    && rm -f export_onnx.py
+
+# Copy Ray Serve app
+COPY ray_serve/serve_app.py .
+
+# Copy LightGBM + label encoder
+COPY models/ /models/
+
+EXPOSE 8100
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8100/health || exit 1
+
+CMD ["python", "serve_app.py"]
