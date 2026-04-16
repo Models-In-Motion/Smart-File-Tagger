@@ -1,4 +1,102 @@
 services:
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: tagger
+      POSTGRES_PASSWORD: tagger
+      POSTGRES_DB: tagger
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tagger"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.13.0
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_artifacts:/mlflow/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["sh", "-c", "pip install psycopg2-binary -q && mlflow server --backend-store-uri postgresql://tagger:tagger@postgres:5432/tagger --default-artifact-root /mlflow/artifacts --host 0.0.0.0 --port 5000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 15s
+      timeout: 5s
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  serving:
+    build:
+      context: ./serving
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      DB_URL: postgresql://tagger:tagger@postgres:5432/tagger
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      USE_ONNX: "true"
+      USE_STUB_MODEL: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mlflow:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  training:
+    build:
+      context: ./training
+      dockerfile: Dockerfile
+    environment:
+      DB_URL: postgresql://tagger:tagger@postgres:5432/tagger
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      ARTIFACT_DIR: /app/artifacts
+    volumes:
+      - ./artifacts:/app/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mlflow:
+        condition: service_healthy
+    profiles:
+      - training
+
+  retrain-cron:
+    build:
+      context: ./training
+      dockerfile: Dockerfile
+    environment:
+      DB_URL: postgresql://tagger:tagger@postgres:5432/tagger
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      ARTIFACT_DIR: /app/artifacts
+    volumes:
+      - ./artifacts:/app/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mlflow:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "while true; do
+        echo '[retrain-cron] Starting training run at $$(date)';
+        python train.py --config configs/train.yaml --model tfidf_logreg;
+        echo '[retrain-cron] Training done. Sleeping 24h.';
+        sleep 86400;
+      done"
+
   qdrant:
     image: qdrant/qdrant:latest
     ports:
@@ -37,8 +135,13 @@ services:
   batch-pipeline:
     build: .
     entrypoint: ["python", "batch_pipeline.py"]
+    environment:
+      DB_URL: postgresql://tagger:tagger@postgres:5432/tagger
     volumes:
       - ./artifacts:/app/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
     command:
       - --dataset
       - /app/artifacts/ocw_dataset_expanded.parquet
@@ -53,7 +156,7 @@ services:
     build: .
     entrypoint: ["python", "mock_predict_server.py"]
     ports:
-      - "8000:8000"
+      - "8001:8000"
 
   data-generator:
     build: .
@@ -61,14 +164,14 @@ services:
     volumes:
       - ./artifacts:/app/artifacts
     depends_on:
-      - mock-predict
+      - serving
     command:
       - --input
       - /app/artifacts/ocw_dataset.parquet
       - --output
       - /app/artifacts/production_feedback.jsonl
       - --predict-url
-      - http://mock-predict:8000/predict
+      - http://serving:8000/predict
 
   ocw-pipeline:
     build: .
@@ -82,3 +185,29 @@ services:
       - /app/artifacts/ocw_dataset.parquet
       - --summary-output
       - /app/artifacts/ocw_summary.json
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - serving
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+
+volumes:
+  postgres_data:
+  mlflow_artifacts:
+  grafana_data:
