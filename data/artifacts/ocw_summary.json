@@ -1,0 +1,28 @@
+{
+  "num_rows": 549,
+  "num_courses": 5,
+  "dataset_version": "v1.0",
+  "ingestion_timestamp": "2026-04-03T18:04:52Z",
+  "text_backend": "pypdf",
+  "min_text_chars": 200,
+  "rows_before_dedupe": 551,
+  "rows_after_dedupe": 549,
+  "label_counts": {
+    "Lecture Notes": 186,
+    "Other": 147,
+    "Problem Set": 96,
+    "Exam": 60,
+    "Reading": 60
+  },
+  "label_source_counts": {
+    "folder_structure": 402,
+    "no_rule_matched": 147
+  },
+  "course_counts": {
+    "5.111SC": 204,
+    "6.006": 122,
+    "18.01": 121,
+    "6.034": 66,
+    "6.042J": 36
+  }
+}
