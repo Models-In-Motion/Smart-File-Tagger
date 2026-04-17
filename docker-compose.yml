@@ -70,6 +70,17 @@ services:
       - --predict-url
       - http://mock-predict:8000/predict
 
+  scraper:
+    build: .
+    entrypoint: ["python", "scrape_ocw.py"]
+    volumes:
+      - ./data:/app/data
+    command:
+      - --output-dir
+      - /app/data/courses
+      - --sleep
+      - "3"
+
   ocw-pipeline:
     build: .
     volumes:

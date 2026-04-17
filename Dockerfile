@@ -18,6 +18,7 @@ COPY batch_pipeline.py .
 COPY online_features.py .
 COPY synthetic_expansion.py .
 COPY mock_predict_server.py .
+COPY scrape_ocw.py .
 
 ENTRYPOINT ["python", "build_ocw_dataset.py"]
 CMD ["--help"]
