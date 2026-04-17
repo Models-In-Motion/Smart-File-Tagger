@@ -17,6 +17,8 @@ Startup:
     When the server starts, we load the ML model into memory ONCE.
     This is the Predictor object. Every request reuses the same object.
     Loading it per-request would add 2-3 seconds to every single prediction.
+
+Assisted by Claude Sonnet 4.5
 """
 
 import time
@@ -26,6 +28,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
+
+from prometheus_fastapi_instrumentator import Instrumentator
+from prometheus_client import Counter, Histogram
 
 from extractor import extract_text
 from predictor import Predictor
@@ -58,34 +63,22 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Application startup and shutdown
 # ---------------------------------------------------------------------------
-# The @asynccontextmanager lifespan pattern is how FastAPI runs
-# setup code before the server starts accepting requests.
-# Think of it as "do this before opening the doors".
-
 predictor: Predictor = None   # global, set during startup
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Runs once on startup, and once on shutdown.
-    Code before `yield` = startup.
-    Code after `yield` = shutdown.
-    """
     global predictor
 
     log.info("Server starting up...")
 
-    # Set up database tables
     ensure_feedback_table_exists()
     ensure_categories_table_exists()
 
-    # Load ML model into memory
-    # This is the slow step — SBERT download/load takes ~5-10 seconds first time
     predictor = Predictor()
 
     log.info("Server ready to accept requests")
 
-    yield  # server runs here, handling requests
+    yield
 
     log.info("Server shutting down")
 
@@ -101,11 +94,50 @@ app = FastAPI(
     lifespan    = lifespan,
 )
 
+# ---------------------------------------------------------------------------
+# Prometheus metrics
+# ---------------------------------------------------------------------------
+# Instrumentator automatically tracks:
+#   - http_requests_total (by method, endpoint, status code)
+#   - http_request_duration_seconds (latency histogram)
+# We add custom metrics on top for ML-specific tracking.
+Instrumentator().instrument(app).expose(app)
+
+prediction_counter = Counter(
+    "predictions_total",
+    "Total predictions made, broken down by predicted label and action taken",
+    ["label", "action"]
+)
+# Why track by label AND action? If "Lecture Notes" always gets auto_tag
+# but "Solution" always gets no_tag, that tells you the model is
+# underconfident on Solution — useful signal for retraining.
+
+confidence_histogram = Histogram(
+    "prediction_confidence",
+    "Distribution of prediction confidence scores across all requests",
+    buckets=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+)
+# Why a histogram? If the distribution shifts over time (e.g. average
+# confidence drops from 0.8 to 0.4), that's a sign of model drift
+# even before user feedback tells you something is wrong.
+
+feedback_counter = Counter(
+    "feedback_total",
+    "Total feedback events received, broken down by feedback type",
+    ["feedback_type"]
+)
+# Tracks accepted / rejected / corrected separately so you can
+# compute correction rate = corrected / (accepted + rejected + corrected)
+
+correction_counter = Counter(
+    "feedback_corrections_total",
+    "Total times users corrected the predicted label (feedback_type=corrected)"
+)
+# Kept separate for easy alerting: if this spikes, something is wrong.
+
 
 # ---------------------------------------------------------------------------
-# Pydantic models — define the shape of request and response bodies
-# Pydantic validates incoming data automatically and gives clear error
-# messages if something is missing or the wrong type.
+# Pydantic models
 # ---------------------------------------------------------------------------
 
 class FeedbackRequest(BaseModel):
@@ -116,7 +148,7 @@ class FeedbackRequest(BaseModel):
     predicted_tag:      str
     confidence:         float
     action_taken:       str
-    feedback_type:      str           # "accepted", "rejected", "corrected"
+    feedback_type:      str
     corrected_tag:      str | None = None
     model_version:      str
     extraction_method:  str | None = None
@@ -125,8 +157,6 @@ class FeedbackRequest(BaseModel):
 class RegisterCategoryRequest(BaseModel):
     user_id:        str
     category_name:  str
-    # example_texts are passed as a list of strings
-    # (Nextcloud app sends the extracted text of each example file)
     example_texts:  list[str]
 
 
@@ -179,14 +209,6 @@ async def predict(
         - file_id : Nextcloud file node ID (e.g. "8821")
 
     Response: JSON matching sample_output.json schema
-
-    Flow:
-        1. Read file bytes from upload
-        2. Extract text (pdfminer or OCR depending on file type)
-        3. Check custom categories first (Layer 2)
-        4. If no custom category matches, use LightGBM classifier (Layer 1)
-        5. Determine action based on confidence threshold
-        6. Return prediction
     """
     start_time = time.time()
 
@@ -195,7 +217,6 @@ async def predict(
         file_bytes = await file.read()
     except Exception as exc:
         log.error(f"Failed to read uploaded file: {exc}")
-        # Fail open — return null tag rather than crashing
         return _null_prediction(file_id, user_id)
 
     if not file_bytes:
@@ -207,8 +228,6 @@ async def predict(
 
     if not extracted_text:
         log.warning(f"Text extraction returned empty for file {file_id}")
-        # Still attempt prediction with empty string — model handles it
-        # by returning low confidence, which will trigger no_tag action
         extracted_text = ""
 
     # Step 3 — check custom categories (Layer 2: few-shot prototype matching)
@@ -224,7 +243,6 @@ async def predict(
 
     # Step 4 — get prediction
     if custom_tag:
-        # Custom category matched — build response from prototype similarity
         from predictor import _determine_action
         action = _determine_action(custom_score)
         prediction_response = {
@@ -241,7 +259,6 @@ async def predict(
             "timestamp":        _now_iso(),
         }
     else:
-        # No custom category matched — use LightGBM baseline classifier (Layer 1)
         result = predictor.predict(text=extracted_text, user_id=user_id)
         prediction_response = {
             "file_id":          file_id,
@@ -264,6 +281,13 @@ async def predict(
         f"action={prediction_response['action']} "
         f"latency={prediction_response['latency_ms']}ms"
     )
+
+    # ── Record Prometheus metrics ────────────────────────────────────────────
+    prediction_counter.labels(
+        label=prediction_response["predicted_tag"],
+        action=prediction_response["action"]
+    ).inc()
+    confidence_histogram.observe(prediction_response["confidence"])
 
     return JSONResponse(content=prediction_response)
 
@@ -298,6 +322,11 @@ def feedback(request: FeedbackRequest):
         extraction_method = request.extraction_method,
     )
 
+    # ── Record Prometheus metrics ────────────────────────────────────────────
+    feedback_counter.labels(feedback_type=request.feedback_type).inc()
+    if request.feedback_type == "corrected":
+        correction_counter.inc()
+
     return {
         "success": saved,
         "message": "Feedback saved" if saved else "Feedback could not be saved (logged server-side)"
@@ -309,8 +338,6 @@ def register_category_endpoint(request: RegisterCategoryRequest):
     """
     Creates a custom category for a user from 3-10 example files.
     Called by the Nextcloud settings page when a user creates a new category.
-
-    Requires the SBERT model to be loaded (it encodes the example texts).
     """
     if predictor is None or predictor.sbert_model is None:
         raise HTTPException(
@@ -335,8 +362,6 @@ def register_category_endpoint(request: RegisterCategoryRequest):
 def list_categories(user_id: str):
     """
     Returns all custom categories for a user.
-    Called by the Nextcloud settings page to display existing categories.
-
     Usage: GET /categories?user_id=nc_user_vsp7234
     """
     categories = list_user_categories(user_id)
@@ -351,7 +376,6 @@ def list_categories(user_id: str):
 def delete_category_endpoint(request: DeleteCategoryRequest):
     """
     Deletes a custom category for a user.
-    Called by the Nextcloud settings page when a user removes a category.
     """
     success = delete_category(
         user_id       = request.user_id,
@@ -374,8 +398,6 @@ def delete_category_endpoint(request: DeleteCategoryRequest):
 def _null_prediction(file_id: str, user_id: str) -> JSONResponse:
     """
     Fail-open response. Returned when file reading or extraction fails.
-    The Nextcloud app receives this and shows no tag suggestion.
-    File upload itself is unaffected — Nextcloud continues normally.
     """
     return JSONResponse(content={
         "file_id":          file_id,

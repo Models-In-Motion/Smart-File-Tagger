@@ -19,7 +19,7 @@ services:
   mlflow:
     image: ghcr.io/mlflow/mlflow:v2.13.0
     ports:
-      - "5000:5000"
+      - "5001:5000"
     volumes:
       - mlflow_artifacts:/mlflow/artifacts
     depends_on:
@@ -28,8 +28,6 @@ services:
     entrypoint: ["sh", "-c", "pip install psycopg2-binary -q && mlflow server --backend-store-uri postgresql://tagger:tagger@postgres:5432/tagger --default-artifact-root /mlflow/artifacts --host 0.0.0.0 --port 5000"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
-      interval: 15s
-      timeout: 5s
       interval: 15s
       timeout: 5s
       retries: 5
@@ -45,6 +43,7 @@ services:
       MLFLOW_TRACKING_URI: http://mlflow:5000
       USE_ONNX: "true"
       USE_STUB_MODEL: "false"
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus_multiproc
     depends_on:
       postgres:
         condition: service_healthy
@@ -150,7 +149,7 @@ services:
       - --output-dir
       - /app/artifacts/versions
       - --version
-      - v1
+      - v2
 
   mock-predict:
     build: .

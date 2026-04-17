@@ -71,7 +71,6 @@ EXPOSE 8000
 # container as unhealthy (visible in `docker ps` output).
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
-
 # ── Start command ─────────────────────────────────────────────────────────────
 # Starts the FastAPI app with Uvicorn.
 # --host 0.0.0.0 : listen on all network interfaces (not just localhost)
@@ -79,6 +78,11 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
 # --port 8000    : the port to listen on
 # --workers 1    : number of worker processes (we test different values for
 #                  the serving options table — 1 is the baseline)
+
+RUN mkdir -p /tmp/prometheus_multiproc
+ENV PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc
+
+
 CMD ["gunicorn", "main:app", \
      "--workers", "4", \
      "--worker-class", "uvicorn.workers.UvicornWorker", \

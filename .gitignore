@@ -8,9 +8,12 @@ FULL_FILE_MANIFEST.txt
 # Python
 __pycache__/
 *.py[cod]
+*.pyc
+.pytest_cache/
 .venv/
 venv/
 env/
+serving/venv/
 
 # Jupyter
 .ipynb_checkpoints/

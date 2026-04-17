@@ -11,8 +11,8 @@ pytesseract==0.3.10          # OCR — reads text from images (needs tesseract i
 # ML model
 sentence-transformers==2.6.1 # SBERT — converts text into embeddings
 lightgbm==4.3.0              # the actual classifier
-numpy==2.0.2                  # must match pickle layout (1.26 → ModuleNotFoundError: numpy._core.numeric)
-scikit-learn==1.5.2           # NumPy 2–compatible; label encoder + similarity
+numpy==2.0.2                 # must match pickle layout (1.26 → ModuleNotFoundError: numpy._core.numeric)
+scikit-learn==1.5.2          # NumPy 2–compatible; label encoder + similarity
 
 # Database
 psycopg2-binary==2.9.9       # PostgreSQL connection
@@ -21,6 +21,9 @@ psycopg2-binary==2.9.9       # PostgreSQL connection
 python-dotenv==1.0.1         # reads .env file for secrets
 pydantic==2.6.4              # data validation (FastAPI uses this under the hood)
 onnxruntime==1.19.2
-onnxscript==0.6.2          # required by torch.onnx.export on PyTorch 2.x (Docker build runs export)
-
+onnxscript==0.6.2            # required by torch.onnx.export on PyTorch 2.x (Docker build runs export)
 gunicorn==21.2.0
+
+# Monitoring
+prometheus-fastapi-instrumentator==6.1.0  # auto-instruments FastAPI with request metrics
+prometheus-client==0.20.0                 # exposes custom counters and histograms
