@@ -1,0 +1,95 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+
+  qdrant-demo:
+    build:
+      context: .
+      dockerfile: Dockerfile.qdrant
+    entrypoint: ["python", "qdrant_demo.py"]
+    volumes:
+      - ./artifacts:/app/artifacts
+    depends_on:
+      - qdrant
+    command:
+      - --input
+      - /app/artifacts/ocw_dataset.parquet
+      - --qdrant-host
+      - qdrant
+
+  synthetic-expansion:
+    build: .
+    entrypoint: ["python", "synthetic_expansion.py"]
+    volumes:
+      - ./artifacts:/app/artifacts
+    command:
+      - --input
+      - /app/artifacts/ocw_dataset.parquet
+      - --output
+      - /app/artifacts/ocw_dataset_expanded.parquet
+      - --multiplier
+      - "5"
+      - --seed
+      - "42"
+
+  batch-pipeline:
+    build: .
+    entrypoint: ["python", "batch_pipeline.py"]
+    volumes:
+      - ./artifacts:/app/artifacts
+    command:
+      - --dataset
+      - /app/artifacts/ocw_dataset_expanded.parquet
+      - --feedback
+      - /app/artifacts/production_feedback.jsonl
+      - --output-dir
+      - /app/artifacts/versions
+      - --version
+      - v1
+
+  mock-predict:
+    build: .
+    entrypoint: ["python", "mock_predict_server.py"]
+    ports:
+      - "8000:8000"
+
+  data-generator:
+    build: .
+    entrypoint: ["python", "data_generator.py"]
+    volumes:
+      - ./artifacts:/app/artifacts
+    depends_on:
+      - mock-predict
+    command:
+      - --input
+      - /app/artifacts/ocw_dataset.parquet
+      - --output
+      - /app/artifacts/production_feedback.jsonl
+      - --predict-url
+      - http://mock-predict:8000/predict
+
+  scraper:
+    build: .
+    entrypoint: ["python", "scrape_ocw.py"]
+    volumes:
+      - ./data:/app/data
+    command:
+      - --output-dir
+      - /app/data/courses
+      - --sleep
+      - "3"
+
+  ocw-pipeline:
+    build: .
+    volumes:
+      - ./:/app/workspace:ro
+      - ./artifacts:/app/artifacts
+    command:
+      - --root
+      - /app/workspace
+      - --output
+      - /app/artifacts/ocw_dataset.parquet
+      - --summary-output
+      - /app/artifacts/ocw_summary.json

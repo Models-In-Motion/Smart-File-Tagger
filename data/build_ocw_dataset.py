@@ -328,7 +328,10 @@ def modern_course_records(
             internal = "Syllabus"
 
         label        = internal_to_canonical(internal)
-        label_source = "folder_structure" if internal else "no_rule_matched"
+        # "Other" must always come from "no_rule_matched" per team schema.
+        # Instructor Insights → Other via INTERNAL_TO_LABEL, but the LRT was
+        # resolved from data.json, so internal is truthy — override the source.
+        label_source = "no_rule_matched" if label == "Other" else ("folder_structure" if internal else "no_rule_matched")
 
         source_file: Optional[str] = None
         source_path: Optional[Path] = None

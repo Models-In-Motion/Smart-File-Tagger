@@ -16,8 +16,8 @@ from pathlib import Path
 import pandas as pd
 
 VALID_LABELS = {
-    "Lecture Notes", "Problem Set", "Exam", "Syllabus",
-    "Reading", "Solution", "Project", "Recitation", "Lab", "Other",
+    "Lecture Notes", "Problem Set", "Exam",
+    "Reading", "Solution", "Project", "Other",
 }
 
 
@@ -53,10 +53,6 @@ def load_feedback(path: str) -> pd.DataFrame | None:
 
 def apply_candidate_selection(df: pd.DataFrame, feedback: pd.DataFrame | None) -> pd.DataFrame:
     before = len(df)
-
-    # Drop low-confidence labels (Other rows with no structural rule)
-    df = df[df["label_source"] != "no_rule_matched"].copy()
-    print(f"[INFO] After dropping no_rule_matched: {len(df)} rows (dropped {before - len(df)})")
 
     # Drop short texts (likely extraction failures)
     before2 = len(df)
