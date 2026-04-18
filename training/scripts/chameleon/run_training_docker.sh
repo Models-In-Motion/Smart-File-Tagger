@@ -26,8 +26,13 @@ if [ -z "${MLFLOW_TRACKING_URI:-}" ]; then
   exit 1
 fi
 
+# Resolve repo root and training directory so training can read ../data artifacts.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TRAINING_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+REPO_ROOT="$(cd "${TRAINING_DIR}/.." && pwd)"
+
 # Build image once (safe to re-run).
-docker build -t mlops-trainer:latest .
+docker build -t mlops-trainer:latest "${TRAINING_DIR}"
 
 # Reuse Hugging Face cache so SBERT model download doesn't repeat for each run.
 mkdir -p "$HOME/.cache/huggingface"
@@ -35,9 +40,9 @@ mkdir -p "$HOME/.cache/huggingface"
 docker run --rm \
   --name "train-${MODEL}" \
   -e MLFLOW_TRACKING_URI="${MLFLOW_TRACKING_URI}" \
-  -v "$PWD:/app" \
+  -v "${REPO_ROOT}:/workspace" \
   -v "$HOME/.cache/huggingface:/root/.cache/huggingface" \
-  -w /app \
+  -w /workspace/training \
   mlops-trainer:latest \
   python train.py \
     --config configs/train.yaml \
