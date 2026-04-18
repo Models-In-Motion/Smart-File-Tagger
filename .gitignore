@@ -49,6 +49,13 @@ dataset_all.parquet
 artifacts/demo_logs/
 artifacts/production_feedback.jsonl
 
+# data/artifacts — ignore all generated data, keep directory via .gitkeep
+data/artifacts/*.parquet
+data/artifacts/*.jsonl
+data/artifacts/*.json
+data/artifacts/versions/
+data/artifacts/courses/
+
 # Training outputs (keep dirs via training/artifacts/**/.gitkeep; do not commit bundles)
 training/artifacts/**/*.joblib
 training/artifacts/**/metrics_summary.json
