@@ -13,7 +13,7 @@ Table this script owns:
   drift_metrics  (created automatically on first run)
 
 Tables this script reads (owned by serving):
-  predictions  — every /predict call (predicted_label, confidence, char_count, ts)
+  predictions  — every /predict call (predicted_tag, confidence, model_version, char_count, ts)
   feedback     — every /feedback call (user_action, user_label, ts)
 
 Exit codes:
@@ -93,7 +93,7 @@ def ensure_drift_metrics_table(conn) -> None:
 def load_predictions_from_db(conn) -> pd.DataFrame:
     """Read all rows from the predictions table (owned by Krish's serving layer)."""
     query = """
-        SELECT predicted_label, confidence, char_count, created_at AS ts
+        SELECT predicted_tag, confidence, model_version, char_count, created_at AS ts
         FROM   predictions
         ORDER  BY created_at DESC
     """
@@ -221,7 +221,7 @@ def check_label_drift(
     baseline_vec = label_distribution_vector(baseline_df["label"], labels)
 
     pred_col = None
-    for col in ("predicted_label", "model_label", "label"):
+    for col in ("predicted_tag", "predicted_label", "model_label", "label"):
         if col in predictions_df.columns:
             pred_col = col
             break
