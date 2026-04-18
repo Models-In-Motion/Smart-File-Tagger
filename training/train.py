@@ -99,18 +99,18 @@ def slugify(label: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
 
 
-def load_and_filter_data(cfg: dict[str, Any]) -> tuple[pd.Series, pd.Series]:
-    data_cfg = cfg["data"]
-    df = pd.read_parquet(data_cfg["path"])
-
-    text_col = data_cfg["text_col"]
-    label_col = data_cfg["label_col"]
-    allowed_labels = data_cfg.get("allowed_labels")
+def load_filtered_frame(
+    path: str,
+    text_col: str,
+    label_col: str,
+    allowed_labels: list[str] | None = None,
+) -> pd.DataFrame:
+    df = pd.read_parquet(path)
 
     if text_col not in df.columns:
-        raise ValueError(f"text_col '{text_col}' not found in data")
+        raise ValueError(f"text_col '{text_col}' not found in data at path: {path}")
     if label_col not in df.columns:
-        raise ValueError(f"label_col '{label_col}' not found in data")
+        raise ValueError(f"label_col '{label_col}' not found in data at path: {path}")
 
     df = df[[text_col, label_col]].copy()
     df[text_col] = df[text_col].fillna("").astype(str)
@@ -123,9 +123,92 @@ def load_and_filter_data(cfg: dict[str, Any]) -> tuple[pd.Series, pd.Series]:
         df = df[df[label_col].isin(allowed_labels)]
 
     if df.empty:
-        raise ValueError("No rows left after filtering")
+        raise ValueError(f"No rows left after filtering for path: {path}")
+
+    return df
+
+
+def load_and_filter_data(cfg: dict[str, Any]) -> tuple[pd.Series, pd.Series]:
+    data_cfg = cfg["data"]
+    text_col = data_cfg["text_col"]
+    label_col = data_cfg["label_col"]
+    allowed_labels = data_cfg.get("allowed_labels")
+    df = load_filtered_frame(
+        path=data_cfg["path"],
+        text_col=text_col,
+        label_col=label_col,
+        allowed_labels=allowed_labels,
+    )
 
     return df[text_col], df[label_col]
+
+
+def load_pre_split_data(cfg: dict[str, Any]) -> tuple[SplitData, LabelEncoder] | None:
+    data_cfg = cfg["data"]
+    eval_path = data_cfg.get("eval_path")
+    if not eval_path:
+        return None
+
+    text_col = data_cfg["text_col"]
+    label_col = data_cfg["label_col"]
+    allowed_labels = data_cfg.get("allowed_labels")
+    seed = int(cfg["split"]["random_state"])
+    val_from_eval_size = float(cfg["split"].get("val_from_eval_size", 0.5))
+
+    if not 0.0 < val_from_eval_size < 1.0:
+        raise ValueError("split.val_from_eval_size must be between 0 and 1")
+
+    train_df = load_filtered_frame(
+        path=data_cfg["path"],
+        text_col=text_col,
+        label_col=label_col,
+        allowed_labels=allowed_labels,
+    )
+    eval_df = load_filtered_frame(
+        path=eval_path,
+        text_col=text_col,
+        label_col=label_col,
+        allowed_labels=allowed_labels,
+    )
+
+    train_labels = set(train_df[label_col].unique())
+    eval_labels = set(eval_df[label_col].unique())
+    unseen_eval_labels = sorted(eval_labels - train_labels)
+    if unseen_eval_labels:
+        raise ValueError(
+            "Found labels in eval dataset not present in train dataset: "
+            + ", ".join(unseen_eval_labels)
+        )
+
+    stratify_labels = None
+    label_counts = eval_df[label_col].value_counts()
+    if eval_df[label_col].nunique() > 1 and int(label_counts.min()) >= 2:
+        stratify_labels = eval_df[label_col]
+
+    x_val_txt, x_test_txt, y_val_raw, y_test_raw = train_test_split(
+        eval_df[text_col],
+        eval_df[label_col],
+        train_size=val_from_eval_size,
+        random_state=seed,
+        stratify=stratify_labels,
+    )
+
+    encoder = LabelEncoder()
+    y_train = encoder.fit_transform(train_df[label_col])
+    y_val = encoder.transform(y_val_raw)
+    y_test = encoder.transform(y_test_raw)
+
+    return (
+        SplitData(
+            x_train=train_df[text_col],
+            x_val=x_val_txt,
+            x_test=x_test_txt,
+            y_train=y_train,
+            y_val=y_val,
+            y_test=y_test,
+        ),
+        encoder,
+    )
 
 
 def split_data(texts: pd.Series, labels: pd.Series, cfg: dict[str, Any]) -> tuple[SplitData, LabelEncoder]:
@@ -308,9 +391,18 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("Loading data...", flush=True)
-    texts, labels = load_and_filter_data(cfg)
-    print(f"  rows: {len(texts)}", flush=True)
-    split_raw, encoder = split_data(texts, labels, cfg)
+    pre_split = load_pre_split_data(cfg)
+    if pre_split is None:
+        texts, labels = load_and_filter_data(cfg)
+        print(f"  rows: {len(texts)}", flush=True)
+        split_raw, encoder = split_data(texts, labels, cfg)
+    else:
+        split_raw, encoder = pre_split
+        print(
+            f"  pre-split: train={len(split_raw.y_train)}, "
+            f"val={len(split_raw.y_val)}, test={len(split_raw.y_test)}",
+            flush=True,
+        )
     print("Building features...", flush=True)
 
     feature_start = time.perf_counter()
