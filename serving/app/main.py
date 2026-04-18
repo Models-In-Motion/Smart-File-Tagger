@@ -38,6 +38,8 @@ from feedback import (
     save_feedback,
     get_feedback_for_user,
     ensure_feedback_table_exists,
+    ensure_predictions_table_exists,
+    log_prediction,
     FeedbackType,
 )
 from category_mgr import (
@@ -72,6 +74,7 @@ async def lifespan(app: FastAPI):
     log.info("Server starting up...")
 
     ensure_feedback_table_exists()
+    ensure_predictions_table_exists()
     ensure_categories_table_exists()
 
     predictor = Predictor()
@@ -288,6 +291,18 @@ async def predict(
         action=prediction_response["action"]
     ).inc()
     confidence_histogram.observe(prediction_response["confidence"])
+
+    # Log to PostgreSQL for Viral's drift monitoring
+    log_prediction(
+        file_id           = prediction_response["file_id"],
+        user_id           = prediction_response["user_id"],
+        predicted_tag     = prediction_response["predicted_tag"],
+        confidence        = prediction_response["confidence"],
+        action            = prediction_response["action"],
+        model_version     = prediction_response["model_version"],
+        category_type     = prediction_response["category_type"],
+        latency_ms        = prediction_response["latency_ms"],
+    )
 
     return JSONResponse(content=prediction_response)
 
