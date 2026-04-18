@@ -296,14 +296,22 @@ def main() -> None:
     args = parse_args()
     cfg = load_config(args.config)
 
-    mlflow_uri = args.mlflow_uri or cfg["mlflow"].get("tracking_uri")
+    # Prefer CLI, then env (set in docker-compose for in-network MLflow), then config.
+    mlflow_uri = (
+        args.mlflow_uri
+        or os.environ.get("MLFLOW_TRACKING_URI")
+        or cfg["mlflow"].get("tracking_uri")
+    )
     experiment_name = args.experiment_name or cfg["mlflow"]["experiment_name"]
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    print("Loading data...", flush=True)
     texts, labels = load_and_filter_data(cfg)
+    print(f"  rows: {len(texts)}", flush=True)
     split_raw, encoder = split_data(texts, labels, cfg)
+    print("Building features...", flush=True)
 
     feature_start = time.perf_counter()
     if args.model.startswith("tfidf_"):
@@ -315,9 +323,11 @@ def main() -> None:
         featurizer_kind = "sbert"
         sbert_name = cfg["models"]["sbert"]["model_name"]
     feature_seconds = time.perf_counter() - feature_start
+    print(f"  feature build took {feature_seconds:.1f}s", flush=True)
 
     classifier = build_classifier(args.model, cfg, num_classes=len(encoder.classes_))
 
+    print("Training classifier...", flush=True)
     train_start = time.perf_counter()
     classifier.fit(split.x_train, split.y_train)
     train_seconds = time.perf_counter() - train_start
@@ -378,6 +388,9 @@ def main() -> None:
 
     if mlflow_uri:
         mlflow.set_tracking_uri(mlflow_uri)
+        print(f"Logging to MLflow at {mlflow_uri}", flush=True)
+    else:
+        print("Logging to local MLflow (./mlruns); set MLFLOW_TRACKING_URI to use a server.", flush=True)
     mlflow.set_experiment(experiment_name)
 
     with mlflow.start_run(run_name=args.run_name):
@@ -407,7 +420,49 @@ def main() -> None:
         for key, value in all_metrics.items():
             mlflow.log_metric(key, float(value))
 
-        mlflow.log_artifact(str(artifact_path), artifact_path="model")
+        # ── Quality gates ────────────────────────────────────────────────
+        # Only register the model if it meets minimum quality thresholds.
+        # This prevents bad models from being deployed automatically.
+        MACRO_F1_THRESHOLD = 0.60
+        MIN_CLASS_F1_THRESHOLD = 0.40
+
+        test_macro_f1 = all_metrics["test_macro_f1"]
+        min_class_f1 = min(
+            v for k, v in all_metrics.items()
+            if k.startswith("test_f1_")
+        )
+
+        gates_passed = (
+            test_macro_f1 >= MACRO_F1_THRESHOLD
+            and min_class_f1 >= MIN_CLASS_F1_THRESHOLD
+        )
+
+        mlflow.log_metric("quality_gate_passed", float(gates_passed))
+        mlflow.log_metric("min_class_f1", min_class_f1)
+
+        if gates_passed:
+            print(
+                f"Quality gates PASSED — "
+                f"macro_f1={test_macro_f1:.3f}, "
+                f"min_class_f1={min_class_f1:.3f}",
+                flush=True,
+            )
+            mlflow.sklearn.log_model(
+                sk_model=classifier,
+                artifact_path="model",
+                registered_model_name="smart-tagger" if gates_passed else None,
+            )
+            # Also save the full bundle as a separate artifact for the serving layer
+            mlflow.log_artifact(str(artifact_path), artifact_path="bundle")
+
+        else:
+            print(
+                f"Quality gates FAILED — "
+                f"macro_f1={test_macro_f1:.3f} (need {MACRO_F1_THRESHOLD}), "
+                f"min_class_f1={min_class_f1:.3f} (need {MIN_CLASS_F1_THRESHOLD})",
+                flush=True,
+            )
+            print("Model NOT registered.", flush=True)
 
         summary_path = model_artifact_dir / "metrics_summary.json"
         with open(summary_path, "w", encoding="utf-8") as f:

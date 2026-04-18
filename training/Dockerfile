@@ -18,4 +18,4 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 
 COPY . .
 
-CMD ["python", "train.py", "--config", "configs/train.yaml", "--model", "tfidf_logreg"]
+CMD ["python", "train.py", "--config", "configs/train_docker.yaml", "--model", "tfidf_logreg"]

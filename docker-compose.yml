@@ -64,7 +64,9 @@ services:
       MLFLOW_TRACKING_URI: http://mlflow:5000
       ARTIFACT_DIR: /app/artifacts
     volumes:
-      - ./artifacts:/app/artifacts
+      - ./training/artifacts:/app/artifacts
+      # Mount Viral's data so training can read train/eval parquet files
+      - ./data/artifacts:/app/data_artifacts:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -82,7 +84,8 @@ services:
       MLFLOW_TRACKING_URI: http://mlflow:5000
       ARTIFACT_DIR: /app/artifacts
     volumes:
-      - ./artifacts:/app/artifacts
+      - ./training/artifacts:/app/artifacts
+      - ./data/artifacts:/app/data_artifacts:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -91,7 +94,7 @@ services:
     entrypoint: >
       sh -c "while true; do
         echo '[retrain-cron] Starting training run at $$(date)';
-        python train.py --config configs/train.yaml --model tfidf_logreg;
+        python train.py --config configs/train_docker.yaml --model tfidf_logreg;
         echo '[retrain-cron] Training done. Sleeping 24h.';
         sleep 86400;
       done"
@@ -103,11 +106,11 @@ services:
 
   qdrant-demo:
     build:
-      context: .
+      context: ./data
       dockerfile: Dockerfile.qdrant
     entrypoint: ["python", "qdrant_demo.py"]
     volumes:
-      - ./artifacts:/app/artifacts
+      - ./data/artifacts:/app/artifacts
     depends_on:
       - qdrant
     command:
@@ -117,10 +120,11 @@ services:
       - qdrant
 
   synthetic-expansion:
-    build: .
+    build:
+      context: ./data
     entrypoint: ["python", "synthetic_expansion.py"]
     volumes:
-      - ./artifacts:/app/artifacts
+      - ./data/artifacts:/app/artifacts
     command:
       - --input
       - /app/artifacts/ocw_dataset.parquet
@@ -132,12 +136,13 @@ services:
       - "42"
 
   batch-pipeline:
-    build: .
+    build:
+      context: ./data
     entrypoint: ["python", "batch_pipeline.py"]
     environment:
       DB_URL: postgresql://tagger:tagger@postgres:5432/tagger
     volumes:
-      - ./artifacts:/app/artifacts
+      - ./data/artifacts:/app/artifacts
     depends_on:
       postgres:
         condition: service_healthy
@@ -152,16 +157,18 @@ services:
       - v2
 
   mock-predict:
-    build: .
+    build:
+      context: ./data
     entrypoint: ["python", "mock_predict_server.py"]
     ports:
       - "8001:8000"
 
   data-generator:
-    build: .
+    build:
+      context: ./data
     entrypoint: ["python", "data_generator.py"]
     volumes:
-      - ./artifacts:/app/artifacts
+      - ./data/artifacts:/app/artifacts
     depends_on:
       - serving
     command:
@@ -173,10 +180,11 @@ services:
       - http://serving:8000/predict
 
   ocw-pipeline:
-    build: .
+    build:
+      context: ./data
     volumes:
-      - ./:/app/workspace:ro
-      - ./artifacts:/app/artifacts
+      - ./data:/app/workspace:ro
+      - ./data/artifacts:/app/artifacts
     command:
       - --root
       - /app/workspace

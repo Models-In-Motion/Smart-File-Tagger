@@ -20,6 +20,9 @@ serving/venv/
 
 # App/model artifacts
 models/
+mlruns/
+mlflow.db
+mlruns_local/
 .env
 *.pkl
 *.pt
@@ -45,3 +48,7 @@ dataset_all.parquet
 # Artifacts — track specific files, ignore large/generated ones
 artifacts/demo_logs/
 artifacts/production_feedback.jsonl
+
+# Training outputs (keep dirs via training/artifacts/**/.gitkeep; do not commit bundles)
+training/artifacts/**/*.joblib
+training/artifacts/**/metrics_summary.json
