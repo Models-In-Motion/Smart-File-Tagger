@@ -149,12 +149,35 @@ services:
     command:
       - --dataset
       - /app/artifacts/ocw_dataset_expanded.parquet
-      - --feedback
-      - /app/artifacts/production_feedback.jsonl
+      - --feedback-source
+      - postgres
+      - --db-url
+      - postgresql://tagger:tagger@postgres:5432/tagger
       - --output-dir
       - /app/artifacts/versions
       - --version
       - v2
+
+  drift-monitor:
+    build:
+      context: ./data
+    entrypoint: ["python", "drift_monitor.py"]
+    environment:
+      DB_URL: postgresql://tagger:tagger@postgres:5432/tagger
+    volumes:
+      - ./data/artifacts:/app/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - --baseline
+      - /app/artifacts/versions/v2/train.parquet
+      - --output
+      - /app/artifacts/drift_report.json
+      - --version
+      - v2
+      - --interval
+      - "3600"
 
   mock-predict:
     build:
@@ -170,7 +193,8 @@ services:
     volumes:
       - ./data/artifacts:/app/artifacts
     depends_on:
-      - serving
+      serving:
+        condition: service_healthy
     command:
       - --input
       - /app/artifacts/ocw_dataset.parquet
@@ -178,6 +202,8 @@ services:
       - /app/artifacts/production_feedback.jsonl
       - --predict-url
       - http://serving:8000/predict
+      - --feedback-url
+      - http://serving:8000/feedback
 
   ocw-pipeline:
     build:

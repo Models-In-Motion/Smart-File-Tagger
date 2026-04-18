@@ -487,6 +487,105 @@ def legacy_course_records(
 
 
 # ---------------------------------------------------------------------------
+# Checkpoint 1 — Ingestion validation
+# ---------------------------------------------------------------------------
+
+def validate_ingestion(df: pd.DataFrame) -> None:
+    """
+    Hard checks raise ValueError and block the parquet write.
+    Warnings print but do not block.
+    """
+    errors:   list[str] = []
+    warnings: list[str] = []
+
+    # ── Hard checks ──────────────────────────────────────────────────────────
+
+    # 1. Required columns present + no nulls
+    for col in REQUIRED_COLUMNS:
+        if col not in df.columns:
+            errors.append(f"Missing required column: {col}")
+        elif df[col].isnull().any():
+            n = int(df[col].isnull().sum())
+            errors.append(f"Null values in required column '{col}': {n} rows")
+
+    # 2. Valid label values
+    if "label" in df.columns:
+        bad = set(df["label"].unique()) - VALID_LABELS
+        if bad:
+            errors.append(f"Invalid label values: {bad}")
+
+    # 3. Valid label_source values
+    if "label_source" in df.columns:
+        bad = set(df["label_source"].unique()) - VALID_LABEL_SOURCES
+        if bad:
+            errors.append(f"Invalid label_source values: {bad}")
+
+    # 4. Other rows must have label_source == no_rule_matched
+    if "label" in df.columns and "label_source" in df.columns:
+        bad_other = df[(df["label"] == "Other") & (df["label_source"] != "no_rule_matched")]
+        if len(bad_other):
+            errors.append(f"{len(bad_other)} rows: label=Other but label_source != no_rule_matched")
+
+    # 5. No duplicate doc_id
+    if "doc_id" in df.columns:
+        dupes = int(df["doc_id"].duplicated().sum())
+        if dupes:
+            errors.append(f"Duplicate doc_id values: {dupes} rows")
+
+    # 6. No rows with char_count < 200
+    if "char_count" in df.columns:
+        short = int((df["char_count"] < 200).sum())
+        if short:
+            errors.append(f"{short} rows with char_count < 200 (extraction failures not filtered)")
+
+    # 7. No empty extracted_text
+    if "extracted_text" in df.columns:
+        empty = int((df["extracted_text"].str.strip() == "").sum())
+        if empty:
+            errors.append(f"{empty} rows with empty extracted_text")
+
+    # 8. word_count > 0
+    if "word_count" in df.columns:
+        zero_wc = int((df["word_count"] <= 0).sum())
+        if zero_wc:
+            errors.append(f"{zero_wc} rows with word_count <= 0")
+
+    # ── Warnings ─────────────────────────────────────────────────────────────
+
+    if "label" in df.columns:
+        label_counts = df["label"].value_counts()
+
+        # 9. Warn if any label has fewer than 10 examples
+        for label, count in label_counts.items():
+            if count < 10:
+                warnings.append(f"Label '{label}' has only {count} examples — too sparse to train on")
+
+        # 10. Warn if Other exceeds 40% of dataset
+        other_pct = round(label_counts.get("Other", 0) / len(df) * 100, 1)
+        if other_pct > 40:
+            warnings.append(f"'Other' is {other_pct}% of dataset — label rules may need updating")
+
+    # ── Print summary ────────────────────────────────────────────────────────
+    print("\n=== Ingestion Validation ===")
+    print(f"Total rows : {len(df)}")
+    if "label" in df.columns:
+        for label, count in sorted(df["label"].value_counts().items()):
+            print(f"  {label:<20} {count:>6}")
+    print(f"Warnings   : {len(warnings)}")
+    for w in warnings:
+        print(f"  [WARN] {w}")
+    print(f"Errors     : {len(errors)}")
+
+    if errors:
+        for e in errors:
+            print(f"  [FAIL] {e}")
+        print("Status     : FAIL — parquet NOT written")
+        raise ValueError("Ingestion validation failed")
+
+    print("Status     : PASS")
+
+
+# ---------------------------------------------------------------------------
 # Dataset validation (from team schema spec)
 # ---------------------------------------------------------------------------
 
@@ -597,6 +696,7 @@ def build_dataset(
     after = len(df)
 
     validate_dataset(df)
+    validate_ingestion(df)
 
     output_parquet.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(output_parquet, index=False)

@@ -39,8 +39,8 @@ except ImportError:
     _REQUESTS_AVAILABLE = False
 
 VALID_LABELS = [
-    "Lecture Notes", "Problem Set", "Exam", "Syllabus",
-    "Reading", "Solution", "Project", "Recitation", "Lab", "Other",
+    "Lecture Notes", "Problem Set", "Exam",
+    "Reading", "Solution", "Project", "Other",
 ]
 
 TEXT_CHARS = 512   # chars sent to /predict
@@ -67,6 +67,25 @@ def predict_via_http(doc: dict, predict_url: str) -> str | None:
         return resp.json().get("predicted_tag")
     except Exception:
         return None
+
+
+def post_feedback_via_http(event: dict, feedback_url: str) -> bool:
+    """POST a feedback event to /feedback to simulate the full user flow.
+    Returns True on success, False on any error (non-blocking)."""
+    if not _REQUESTS_AVAILABLE:
+        return False
+    payload = {
+        "doc_id":          event["doc_id"],
+        "predicted_label": event["predicted_label"],
+        "user_action":     event["user_action"],
+        "user_label":      event.get("user_label"),
+    }
+    try:
+        resp = _requests.post(feedback_url, json=payload, timeout=5)
+        resp.raise_for_status()
+        return True
+    except Exception:
+        return False
 
 
 def predict_fallback(real_label: str, rng: random.Random) -> str:
@@ -111,12 +130,14 @@ def generate(
     num_events: int,
     rng: random.Random,
     predict_url: str | None,
+    feedback_url: str | None,
     delay: float,
 ) -> list[dict]:
     records = df.to_dict("records")
     events = []
     http_ok = 0
     http_fail = 0
+    feedback_ok = 0
 
     for i in range(num_events):
         doc = rng.choice(records)
@@ -136,16 +157,22 @@ def generate(
 
         action, user_label = simulate_feedback(predicted, real_label, rng)
 
-        events.append({
-            "event_id":       str(uuid.UUID(int=rng.getrandbits(128))),
-            "timestamp":      random_timestamp(rng),
-            "doc_id":         doc["doc_id"],
-            "filename":       doc["filename"],
+        event = {
+            "event_id":        str(uuid.UUID(int=rng.getrandbits(128))),
+            "timestamp":       random_timestamp(rng),
+            "doc_id":          doc["doc_id"],
+            "filename":        doc["filename"],
             "predicted_label": predicted,
-            "user_action":    action,
-            "user_label":     user_label,
-            "source":         "user_feedback",
-        })
+            "user_action":     action,
+            "user_label":      user_label,
+            "source":          "user_feedback",
+        }
+        events.append(event)
+
+        # POST feedback to Krish's /feedback endpoint to simulate the full user flow
+        if feedback_url and action in ("accept", "correct"):
+            if post_feedback_via_http(event, feedback_url):
+                feedback_ok += 1
 
         if (i + 1) % 50 == 0:
             mode = "http" if predict_url and http_ok > 0 else "fallback"
@@ -155,7 +182,9 @@ def generate(
             time.sleep(delay)
 
     if predict_url:
-        print(f"[INFO] HTTP calls: {http_ok} succeeded, {http_fail} failed (fallback used)")
+        print(f"[INFO] Predict HTTP calls: {http_ok} succeeded, {http_fail} failed (fallback used)")
+    if feedback_url:
+        print(f"[INFO] Feedback HTTP calls: {feedback_ok} posted to {feedback_url}")
 
     return events
 
@@ -191,7 +220,10 @@ def main() -> None:
     parser.add_argument("--num-events", type=int, default=500)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--predict-url", default=None,
-                        help="URL of POST /predict endpoint (e.g. http://mock-predict:8000/predict)")
+                        help="URL of POST /predict endpoint (e.g. http://serving:8000/predict)")
+    parser.add_argument("--feedback-url", default=None,
+                        help="URL of POST /feedback endpoint. Defaults to <predict-url host>/feedback. "
+                             "Set to 'none' to disable feedback posting.")
     parser.add_argument("--delay", type=float, default=0.0,
                         help="Seconds to sleep between events (0 = as fast as possible)")
     args = parser.parse_args()
@@ -199,13 +231,24 @@ def main() -> None:
     df = pd.read_parquet(args.input)
     print(f"[INFO] Loaded {len(df)} documents from {args.input}")
 
+    # Resolve feedback URL: explicit arg > derive from predict URL > None
+    feedback_url: str | None = None
+    if args.feedback_url and args.feedback_url.lower() != "none":
+        feedback_url = args.feedback_url
+    elif args.predict_url:
+        # Derive /feedback from the predict URL host (e.g. http://serving:8000/predict → /feedback)
+        base = args.predict_url.rsplit("/", 1)[0]
+        feedback_url = f"{base}/feedback"
+
     if args.predict_url:
-        print(f"[INFO] Will POST to {args.predict_url}")
+        print(f"[INFO] Predict URL : {args.predict_url}")
     else:
-        print(f"[INFO] No --predict-url given — using in-memory fallback simulation")
+        print(f"[INFO] No --predict-url — using in-memory fallback simulation")
+    if feedback_url:
+        print(f"[INFO] Feedback URL: {feedback_url}")
 
     rng = random.Random(args.seed)
-    events = generate(df, args.num_events, rng, args.predict_url, args.delay)
+    events = generate(df, args.num_events, rng, args.predict_url, feedback_url, args.delay)
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)

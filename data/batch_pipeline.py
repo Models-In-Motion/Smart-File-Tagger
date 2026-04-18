@@ -9,11 +9,18 @@ selection and course-level splitting for leakage prevention.
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
+
+try:
+    import psycopg2
+    _HAS_PSYCOPG2 = True
+except ImportError:
+    _HAS_PSYCOPG2 = False
 
 VALID_LABELS = {
     "Lecture Notes", "Problem Set", "Exam",
@@ -45,6 +52,42 @@ def load_feedback(path: str) -> pd.DataFrame | None:
     df = pd.DataFrame(records)
     print(f"[INFO] Loaded feedback: {len(df)} events from {path}")
     return df
+
+
+def load_feedback_from_postgres(db_url: str) -> pd.DataFrame | None:
+    """
+    Read the feedback table written by Krish's serving layer.
+    Returns a DataFrame with the same columns the pipeline expects:
+      event_id, timestamp, doc_id, filename, predicted_label,
+      user_action, user_label, source
+    Returns None (with a warning) if the connection or query fails.
+    """
+    if not _HAS_PSYCOPG2:
+        print("[ERROR] psycopg2 not installed — cannot read from PostgreSQL. "
+              "Install psycopg2-binary or use --feedback-source jsonl")
+        return None
+    try:
+        conn = psycopg2.connect(db_url)
+        query = """
+            SELECT
+                id::text            AS event_id,
+                created_at          AS timestamp,
+                doc_id,
+                filename,
+                predicted_label,
+                user_action,
+                user_label,
+                'postgres'          AS source
+            FROM feedback
+            ORDER BY created_at ASC
+        """
+        df = pd.read_sql(query, conn)
+        conn.close()
+        print(f"[INFO] Loaded feedback from PostgreSQL: {len(df)} events")
+        return df if len(df) > 0 else None
+    except Exception as exc:
+        print(f"[ERROR] Could not read feedback from PostgreSQL: {exc}")
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +191,97 @@ def write_outputs(
     return out
 
 
+def validate_training_set(train_df: pd.DataFrame, eval_df: pd.DataFrame) -> None:
+    """
+    Runs after train/eval splits are created, before writing to parquet.
+    Hard checks raise ValueError and block the write.
+    Warnings log but do not block.
+    """
+    errors:   list[str] = []
+    warnings: list[str] = []
+
+    REQUIRED_COLS = {
+        "doc_id", "extracted_text", "label", "label_source",
+        "course_id", "source_url", "source", "ingestion_timestamp", "dataset_version",
+    }
+
+    for split_name, df in [("train", train_df), ("eval", eval_df)]:
+
+        # 1. Required columns present + no nulls
+        for col in REQUIRED_COLS:
+            if col not in df.columns:
+                errors.append(f"[{split_name}] Missing required column: {col}")
+            elif df[col].isnull().any():
+                errors.append(f"[{split_name}] Nulls in required column '{col}'")
+
+        # 2. No duplicate doc_id within split
+        if "doc_id" in df.columns:
+            dupes = int(df["doc_id"].duplicated().sum())
+            if dupes:
+                errors.append(f"[{split_name}] {dupes} duplicate doc_id values")
+
+        # 3. At least 2 labels represented
+        if "label" in df.columns:
+            n_labels = df["label"].nunique()
+            if n_labels < 2:
+                errors.append(f"[{split_name}] Only {n_labels} label(s) present — need at least 2")
+
+        # 4. Minimum row counts
+        if split_name == "train" and len(df) < 100:
+            errors.append(f"[train] Only {len(df)} rows — minimum viable training set is 100")
+        if split_name == "eval" and len(df) < 20:
+            errors.append(f"[eval] Only {len(df)} rows — minimum viable eval set is 20")
+
+        # 5. No label in train with fewer than 5 examples
+        if split_name == "train" and "label" in df.columns:
+            for label, count in df["label"].value_counts().items():
+                if count < 5:
+                    errors.append(f"[train] Label '{label}' has only {count} examples — need at least 5")
+
+    # 6. Zero course_id overlap (leakage check)
+    if "course_id" in train_df.columns and "course_id" in eval_df.columns:
+        overlap = set(train_df["course_id"].unique()) & set(eval_df["course_id"].unique())
+        if overlap:
+            errors.append(f"Course overlap detected — data leakage: {overlap}")
+
+    # 7. Label distribution: no label should be >3x its train proportion in eval
+    if "label" in train_df.columns and "label" in eval_df.columns:
+        train_props = (train_df["label"].value_counts() / len(train_df))
+        eval_props  = (eval_df["label"].value_counts()  / len(eval_df))
+        for label in train_props.index:
+            if label in eval_props.index:
+                t = train_props[label]
+                e = eval_props[label]
+                if t > 0 and (e / t) > 3:
+                    warnings.append(
+                        f"Label '{label}' is {e:.1%} in eval vs {t:.1%} in train — >3x skew"
+                    )
+
+    # ── Print summary ────────────────────────────────────────────────────────
+    print("\n=== Training Set Validation ===")
+    print(f"{'Label':<20} {'Train':>8} {'Eval':>8}")
+    print("-" * 38)
+    all_labels = sorted(set(train_df.get("label", pd.Series()).unique()) |
+                        set(eval_df.get("label",  pd.Series()).unique()))
+    train_counts = train_df["label"].value_counts() if "label" in train_df.columns else {}
+    eval_counts  = eval_df["label"].value_counts()  if "label" in eval_df.columns  else {}
+    for label in all_labels:
+        print(f"  {label:<18} {train_counts.get(label, 0):>8} {eval_counts.get(label, 0):>8}")
+    print(f"  {'TOTAL':<18} {len(train_df):>8} {len(eval_df):>8}")
+    print(f"\nWarnings : {len(warnings)}")
+    for w in warnings:
+        print(f"  [WARN] {w}")
+    print(f"Errors   : {len(errors)}")
+
+    if errors:
+        for e in errors:
+            print(f"  [FAIL] {e}")
+        print("Status   : FAIL — splits NOT written")
+        raise ValueError("Training set validation failed")
+
+    print("Status   : PASS")
+
+
 def print_summary(train_df: pd.DataFrame, eval_df: pd.DataFrame, out: Path) -> None:
     total = len(train_df) + len(eval_df)
     train_courses = set(train_df["course_id"].unique())
@@ -186,7 +320,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Batch pipeline: candidate selection + versioned split.")
     parser.add_argument("--dataset", default="artifacts/ocw_dataset.parquet")
     parser.add_argument("--feedback", default="artifacts/production_feedback.jsonl",
-                        help="Path to feedback JSONL (optional)")
+                        help="Path to feedback JSONL (used when --feedback-source jsonl)")
+    parser.add_argument("--feedback-source", default="jsonl", choices=["jsonl", "postgres"],
+                        help="Where to read feedback from: jsonl (default) or postgres")
+    parser.add_argument("--db-url", default=os.environ.get("DB_URL", "postgresql://tagger:tagger@postgres:5432/tagger"),
+                        help="PostgreSQL connection string (used when --feedback-source postgres)")
     parser.add_argument("--output-dir", default="artifacts/versions")
     parser.add_argument("--version", default="v1")
     parser.add_argument("--eval-ratio", type=float, default=0.2)
@@ -194,11 +332,17 @@ def main() -> None:
     args = parser.parse_args()
 
     df = load_dataset(args.dataset)
-    feedback = load_feedback(args.feedback)
+
+    if args.feedback_source == "postgres":
+        feedback = load_feedback_from_postgres(args.db_url)
+    else:
+        feedback = load_feedback(args.feedback)
 
     df = apply_candidate_selection(df, feedback)
 
     train_df, eval_df = course_level_split(df, args.eval_ratio, args.seed)
+
+    validate_training_set(train_df, eval_df)
 
     out = write_outputs(train_df, eval_df, args.output_dir, args.version)
 
