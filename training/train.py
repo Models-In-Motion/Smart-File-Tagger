@@ -539,13 +539,26 @@ def main() -> None:
                 f"min_class_f1={min_class_f1:.3f}",
                 flush=True,
             )
-            mlflow.sklearn.log_model(
+            result = mlflow.sklearn.log_model(
                 sk_model=classifier,
                 artifact_path="model",
                 registered_model_name="smart-tagger" if gates_passed else None,
             )
             # Also save the full bundle as a separate artifact for the serving layer
             mlflow.log_artifact(str(artifact_path), artifact_path="bundle")
+
+            # Auto-promote newly registered models to Staging.
+            try:
+                version = getattr(result, "registered_model_version", None) or getattr(result, "version", None)
+                if version is not None:
+                    from model_registry import promote_to_staging
+
+                    promote_to_staging(str(version))
+                    print(f"Model version {version} auto-promoted to Staging.", flush=True)
+                else:
+                    print("Could not determine registered model version for auto-promotion.", flush=True)
+            except Exception as exc:
+                print(f"Auto-promotion to Staging failed: {exc}", flush=True)
 
         else:
             print(

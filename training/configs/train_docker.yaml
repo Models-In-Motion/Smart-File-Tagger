@@ -1,7 +1,6 @@
 data:
   # Docker path — used when running via docker-compose on Chameleon
   path: /app/data_artifacts/versions/v2/train.parquet
-  eval_path: /app/data_artifacts/versions/v2/eval.parquet
   text_col: extracted_text
   label_col: label
   allowed_labels:
