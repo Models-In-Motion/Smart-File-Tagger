@@ -1,0 +1,29 @@
+{
+  "version": "v14_taxonomy_4class",
+  "source_split": "v12_hybrid_real_qc_balanced",
+  "label_mapping": {
+    "Solution": "Problem Set",
+    "Project": "Other",
+    "Reading": "Other"
+  },
+  "final_labels": [
+    "Exam",
+    "Lecture Notes",
+    "Other",
+    "Problem Set"
+  ],
+  "train_rows": 5344,
+  "eval_rows": 1351,
+  "train_label_counts": {
+    "Lecture Notes": 2438,
+    "Problem Set": 1370,
+    "Other": 1227,
+    "Exam": 309
+  },
+  "eval_label_counts": {
+    "Lecture Notes": 584,
+    "Problem Set": 377,
+    "Other": 332,
+    "Exam": 58
+  }
+}
