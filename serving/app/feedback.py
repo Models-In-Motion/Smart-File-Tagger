@@ -1,22 +1,17 @@
 """
-feedback.py — Feedback Storage and Prediction Logging
+feedback.py — Feedback Storage, Prediction Logging, and Model Status
 Krish Jani (kj2743) — Serving Lead
 ECE-GY 9183 MLOps, Spring 2026
 
-Two responsibilities:
+Three responsibilities:
     1. Save user feedback (accept/reject/correct) to PostgreSQL
     2. Log every prediction to PostgreSQL for drift monitoring
+    3. Store rollback state in PostgreSQL so all Gunicorn workers share it
 
-Why PostgreSQL and not just a file?
-    Multiple users can submit feedback at the same time. A file would get
-    corrupted if two writes happen simultaneously. PostgreSQL handles
-    concurrent writes safely. It also lets Viral's batch pipeline query
-    feedback by date, user, or confidence level cleanly.
-
-Database connection:
-    The connection string is read from the DB_URL environment variable.
-    It is NEVER hardcoded here. Secrets do not go in source code.
-    In Docker, DB_URL is passed via the .env file or docker-compose.yml.
+Why store rollback state in PostgreSQL?
+    Gunicorn runs 4 worker processes. In-memory flags are per-process —
+    if worker A sets _rolled_back=True, workers B/C/D still think it's False.
+    PostgreSQL is shared across all workers so the state is consistent.
 
 Assisted by Claude Sonnet 4.5
 """
@@ -38,23 +33,16 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 class FeedbackType(str, Enum):
-    ACCEPTED   = "accepted"     # user clicked Accept — prediction was correct
-    REJECTED   = "rejected"     # user clicked Reject — prediction was wrong
-    CORRECTED  = "corrected"    # user rejected AND provided the correct label
+    ACCEPTED   = "accepted"
+    REJECTED   = "rejected"
+    CORRECTED  = "corrected"
 
 
 # ---------------------------------------------------------------------------
-# Database setup
+# Database connection
 # ---------------------------------------------------------------------------
 
 def get_connection():
-    """
-    Opens a new PostgreSQL connection.
-
-    Why not keep one connection open forever?
-        A persistent connection can go stale (timeout, network blip).
-        Opening a fresh connection per request is safer for our scale.
-    """
     db_url = get_db_url()
     if db_url is None:
         raise RuntimeError(
@@ -64,11 +52,11 @@ def get_connection():
     return psycopg2.connect(db_url)
 
 
+# ---------------------------------------------------------------------------
+# Table setup
+# ---------------------------------------------------------------------------
+
 def ensure_feedback_table_exists():
-    """
-    Creates the feedback table if it doesn't already exist.
-    Called once when the server starts.
-    """
     sql = """
         CREATE TABLE IF NOT EXISTS feedback (
             id                  SERIAL PRIMARY KEY,
@@ -83,16 +71,10 @@ def ensure_feedback_table_exists():
             extraction_method   TEXT,
             created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
-
-        -- Index on user_id so Vedant's per-user retraining query is fast
         CREATE INDEX IF NOT EXISTS idx_feedback_user_id
             ON feedback (user_id);
-
-        -- Index on created_at so Viral's batch pipeline can filter by date
         CREATE INDEX IF NOT EXISTS idx_feedback_created_at
             ON feedback (created_at);
-
-        -- Index on feedback_type so retrain trigger can count corrections fast
         CREATE INDEX IF NOT EXISTS idx_feedback_type
             ON feedback (feedback_type);
     """
@@ -110,13 +92,7 @@ def ensure_feedback_table_exists():
 def ensure_predictions_table_exists():
     """
     Creates the predictions table if it doesn't already exist.
-    Called once when the server starts.
-
-    Why a separate predictions table from feedback?
-        Not every prediction gets feedback — most users never click
-        Accept or Reject. The predictions table captures ALL predictions
-        so Viral can monitor the full distribution of what the model is
-        predicting in production, not just the subset that got feedback.
+    Every /predict call is logged here for Viral's drift monitoring.
     """
     sql = """
         CREATE TABLE IF NOT EXISTS predictions (
@@ -132,16 +108,10 @@ def ensure_predictions_table_exists():
             latency_ms          FLOAT,
             created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
-
-        -- Index on created_at for Viral's drift monitoring time-window queries
         CREATE INDEX IF NOT EXISTS idx_predictions_created_at
             ON predictions (created_at);
-
-        -- Index on predicted_tag for label distribution queries
         CREATE INDEX IF NOT EXISTS idx_predictions_tag
             ON predictions (predicted_tag);
-
-        -- Index on model_version so we can compare distributions across versions
         CREATE INDEX IF NOT EXISTS idx_predictions_model_version
             ON predictions (model_version);
     """
@@ -156,8 +126,90 @@ def ensure_predictions_table_exists():
         log.error(f"Could not create predictions table: {exc}")
 
 
+def ensure_model_status_table_exists():
+    """
+    Creates the model_status table and seeds initial values.
+
+    This table stores the rollback state shared across all Gunicorn workers.
+    Schema: key-value store with two rows:
+        rolled_back    : "true" or "false"
+        rollback_reason: human-readable reason string
+    """
+    sql = """
+        CREATE TABLE IF NOT EXISTS model_status (
+            id          SERIAL PRIMARY KEY,
+            key         TEXT UNIQUE NOT NULL,
+            value       TEXT NOT NULL,
+            updated_at  TIMESTAMPTZ DEFAULT NOW()
+        );
+        INSERT INTO model_status (key, value)
+        VALUES ('rolled_back', 'false'), ('rollback_reason', '')
+        ON CONFLICT (key) DO NOTHING;
+    """
+    try:
+        conn = get_connection()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+        conn.close()
+        log.info("Model status table ready")
+    except Exception as exc:
+        log.error(f"Could not create model_status table: {exc}")
+
+
 # ---------------------------------------------------------------------------
-# Write predictions (called on every /predict request)
+# Model status (rollback state) — shared across all workers via PostgreSQL
+# ---------------------------------------------------------------------------
+
+def get_model_status(key: str) -> str:
+    """
+    Reads a model status value from PostgreSQL.
+    Called on every /predict request to check rollback state.
+
+    Why not cache this?
+        Caching would break the multi-worker consistency guarantee.
+        The DB query adds ~1ms per request which is acceptable given
+        our latency budget of 50-500ms per prediction.
+    """
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT value FROM model_status WHERE key = %s",
+                (key,)
+            )
+            row = cur.fetchone()
+        conn.close()
+        return row[0] if row else ""
+    except Exception as exc:
+        log.error(f"Could not get model status for key={key}: {exc}")
+        return ""
+
+
+def set_model_status(key: str, value: str):
+    """
+    Writes a model status value to PostgreSQL.
+    Called by /admin/rollback and /admin/restore endpoints.
+    Uses INSERT ... ON CONFLICT to upsert safely.
+    """
+    try:
+        conn = get_connection()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO model_status (key, value, updated_at)
+                    VALUES (%s, %s, NOW())
+                    ON CONFLICT (key) DO UPDATE
+                    SET value = EXCLUDED.value,
+                        updated_at = NOW()
+                """, (key, value))
+        conn.close()
+    except Exception as exc:
+        log.error(f"Could not set model status key={key}: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Write predictions
 # ---------------------------------------------------------------------------
 
 def log_prediction(
@@ -172,25 +224,8 @@ def log_prediction(
     latency_ms:         float | None = None,
 ) -> bool:
     """
-    Logs every prediction to PostgreSQL.
-
-    Called by main.py on every /predict request regardless of whether
-    the user provides feedback. This is what Viral reads for drift monitoring.
-
-    Args:
-        file_id           : Nextcloud file node ID
-        user_id           : Nextcloud user ID
-        predicted_tag     : what the model predicted (e.g. "Problem Set")
-        confidence        : model confidence score (0.0 to 1.0)
-        action            : "auto_tag", "suggest", or "no_tag"
-        model_version     : which model version made this prediction
-        category_type     : "fixed_baseline" or "custom"
-        extraction_method : "pdfminer", "ocr", or "plaintext"
-        latency_ms        : total prediction latency in milliseconds
-
-    Returns:
-        True if saved successfully, False if database write failed.
-        Fail-open — logging failure never crashes the prediction endpoint.
+    Logs every prediction to PostgreSQL for Viral's drift monitoring.
+    Fail-open — never crashes the prediction endpoint.
     """
     sql = """
         INSERT INTO predictions (
@@ -201,17 +236,10 @@ def log_prediction(
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
     values = (
-        file_id,
-        user_id,
-        predicted_tag,
-        confidence,
-        action,
-        category_type,
-        model_version,
-        extraction_method,
-        latency_ms,
+        file_id, user_id, predicted_tag, confidence,
+        action, category_type, model_version,
+        extraction_method, latency_ms,
     )
-
     try:
         conn = get_connection()
         with conn:
@@ -219,9 +247,7 @@ def log_prediction(
                 cur.execute(sql, values)
         conn.close()
         return True
-
     except Exception as exc:
-        # Never crash the prediction endpoint because of logging failure
         log.warning(f"Failed to log prediction to DB (non-fatal): {exc}")
         return False
 
@@ -241,23 +267,7 @@ def save_feedback(
     model_version:      str,
     extraction_method:  str | None = None,
 ) -> bool:
-    """
-    Saves one feedback event to PostgreSQL.
-
-    Args:
-        file_id           : Nextcloud file node ID
-        user_id           : Nextcloud user ID
-        predicted_tag     : what the model predicted (e.g. "Problem Set")
-        confidence        : model confidence score (0.0 to 1.0)
-        action_taken      : "auto_apply", "suggest", or "no_tag"
-        feedback_type     : accepted, rejected, or corrected
-        corrected_tag     : the correct label if feedback_type is corrected
-        model_version     : which model version made this prediction
-        extraction_method : "pdfminer", "ocr", or "plaintext"
-
-    Returns:
-        True if saved successfully, False if database write failed.
-    """
+    """Saves one feedback event to PostgreSQL."""
     if feedback_type == FeedbackType.CORRECTED and not corrected_tag:
         log.warning("Feedback type is 'corrected' but no corrected_tag provided")
         return False
@@ -271,17 +281,10 @@ def save_feedback(
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
     values = (
-        file_id,
-        user_id,
-        predicted_tag,
-        confidence,
-        action_taken,
-        feedback_type.value,
-        corrected_tag,
-        model_version,
-        extraction_method,
+        file_id, user_id, predicted_tag, confidence,
+        action_taken, feedback_type.value, corrected_tag,
+        model_version, extraction_method,
     )
-
     try:
         conn = get_connection()
         with conn:
@@ -294,21 +297,17 @@ def save_feedback(
             f"corrected={corrected_tag}"
         )
         return True
-
     except Exception as exc:
         log.error(f"Failed to save feedback: {exc}")
         return False
 
 
 # ---------------------------------------------------------------------------
-# Read feedback (for Vedant's retraining pipeline)
+# Read feedback
 # ---------------------------------------------------------------------------
 
 def get_feedback_for_user(user_id: str, since_days: int = 30) -> list[dict]:
-    """
-    Returns all feedback events for a user from the last N days.
-    Vedant's retrain_job.py calls this to get user corrections for retraining.
-    """
+    """Returns all feedback events for a user from the last N days."""
     sql = """
         SELECT *
         FROM feedback
@@ -323,7 +322,6 @@ def get_feedback_for_user(user_id: str, since_days: int = 30) -> list[dict]:
             rows = cur.fetchall()
         conn.close()
         return [dict(row) for row in rows]
-
     except Exception as exc:
         log.error(f"Failed to fetch feedback for user {user_id}: {exc}")
         return []
@@ -334,16 +332,7 @@ def get_feedback_for_user(user_id: str, since_days: int = 30) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def get_recent_predictions(hours: int = 1) -> list[dict]:
-    """
-    Returns all predictions from the last N hours.
-    Viral's drift monitoring script calls this to compute label distribution.
-
-    Args:
-        hours : how many hours back to look (default: 1)
-
-    Returns:
-        List of dicts with predicted_tag, confidence, model_version, created_at.
-    """
+    """Returns all predictions from the last N hours."""
     sql = """
         SELECT predicted_tag, confidence, model_version, created_at
         FROM predictions
@@ -357,7 +346,6 @@ def get_recent_predictions(hours: int = 1) -> list[dict]:
             rows = cur.fetchall()
         conn.close()
         return [dict(row) for row in rows]
-
     except Exception as exc:
         log.error(f"Failed to fetch recent predictions: {exc}")
         return []
