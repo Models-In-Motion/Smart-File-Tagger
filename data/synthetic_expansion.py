@@ -128,10 +128,6 @@ AUGMENT_FN = {
 # Synthetic row builder
 # ---------------------------------------------------------------------------
 
-def make_doc_id(text: str) -> str:
-    return hashlib.md5(text.encode()).hexdigest()[:12]
-
-
 def make_synthetic_row(original: dict, method: str, copy_idx: int, rng: random.Random) -> dict:
     """Apply augmentation and build a new row with full lineage info."""
     aug_fn = AUGMENT_FN[method]
@@ -143,7 +139,10 @@ def make_synthetic_row(original: dict, method: str, copy_idx: int, rng: random.R
 
     row = dict(original)
     row["extracted_text"] = new_text
-    row["doc_id"] = make_doc_id(new_text)
+    # Derive from lineage so two different augmentations cannot collide on short text hashes.
+    row["doc_id"] = hashlib.md5(
+        f"{original['doc_id']}|{method}|{copy_idx}".encode()
+    ).hexdigest()[:12]
     row["char_count"] = len(new_text)
     row["word_count"] = len(new_text.split())
     row["source"] = "synthetic"

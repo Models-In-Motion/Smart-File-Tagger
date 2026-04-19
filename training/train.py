@@ -346,6 +346,7 @@ def build_classifier(model_name: str, cfg: dict[str, Any], num_classes: int):
             colsample_bytree=float(c["colsample_bytree"]),
             random_state=int(c["random_state"]),
             n_jobs=int(c["n_jobs"]),
+            is_unbalance=True,
         )
 
     if model_name == "sbert_mlp":
