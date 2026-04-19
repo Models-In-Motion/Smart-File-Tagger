@@ -3,10 +3,6 @@ main.py — FastAPI Entrypoint
 Krish Jani (kj2743) — Serving Lead
 ECE-GY 9183 MLOps, Spring 2026
 
-This is the front door of the entire serving system.
-It defines all the API endpoints and coordinates between
-extractor.py, predictor.py, feedback.py, and category_mgr.py.
-
 Assisted by Claude Sonnet 4.5
 """
 
@@ -28,7 +24,10 @@ from feedback import (
     get_feedback_for_user,
     ensure_feedback_table_exists,
     ensure_predictions_table_exists,
+    ensure_model_status_table_exists,
     log_prediction,
+    get_model_status,
+    set_model_status,
     FeedbackType,
 )
 from category_mgr import (
@@ -41,7 +40,7 @@ from category_mgr import (
 import config
 
 # ---------------------------------------------------------------------------
-# Logging setup
+# Logging
 # ---------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
@@ -52,19 +51,9 @@ log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Application startup and shutdown
+# Application startup
 # ---------------------------------------------------------------------------
-predictor: Predictor = None   # global, set during startup
-
-# ---------------------------------------------------------------------------
-# Rollback state — in-memory flag (Option B)
-# monitor.py calls /admin/rollback to flip this flag.
-# When rolled_back=True, /predict uses stub mode instead of the real model.
-# Flag resets to False on container restart, which is intentional —
-# monitor.py will re-detect and re-trigger rollback if the problem persists.
-# ---------------------------------------------------------------------------
-_rolled_back: bool = False
-_rollback_reason: str = ""
+predictor: Predictor = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -74,21 +63,19 @@ async def lifespan(app: FastAPI):
 
     ensure_feedback_table_exists()
     ensure_predictions_table_exists()
+    ensure_model_status_table_exists()
     ensure_categories_table_exists()
 
     predictor = Predictor()
 
     log.info("Server ready to accept requests")
-
     yield
-
     log.info("Server shutting down")
 
 
 # ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
-
 app = FastAPI(
     title       = "Smart File Tagger — Serving API",
     description = "Predicts document categories for Nextcloud files",
@@ -136,7 +123,6 @@ rollback_counter = Counter(
 
 class FeedbackRequest(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
-
     file_id:            str
     user_id:            str
     predicted_tag:      str
@@ -174,10 +160,7 @@ class LoadModelRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    """
-    Health check endpoint.
-    Reports model status, rollback state, and DB reachability.
-    """
+    """Health check — reports model status, rollback state, DB reachability."""
     db_ok = True
     try:
         from feedback import get_connection
@@ -186,12 +169,15 @@ def health():
     except Exception:
         db_ok = False
 
+    rolled_back = get_model_status("rolled_back") == "true"
+    reason = get_model_status("rollback_reason")
+
     return {
         "status":          "ok",
         "model_loaded":    predictor is not None,
         "model_version":   predictor.model_version if predictor else None,
-        "rolled_back":     _rolled_back,
-        "rollback_reason": _rollback_reason if _rolled_back else None,
+        "rolled_back":     rolled_back,
+        "rollback_reason": reason if rolled_back else None,
         "db_reachable":    db_ok,
     }
 
@@ -203,17 +189,15 @@ async def predict(
     file_id:  str        = Form(...),
 ):
     """
-    Main prediction endpoint. Called by Nextcloud Flow webhook when
-    a user uploads a file.
-
-    If the system is rolled back, returns a null prediction rather than
-    serving potentially bad model outputs.
+    Main prediction endpoint.
+    Returns null prediction if system is rolled back.
     """
     start_time = time.time()
 
-    # If rolled back, fail open with null prediction
-    if _rolled_back:
-        log.warning(f"System is rolled back ({_rollback_reason}), returning null prediction")
+    # Check rollback state from PostgreSQL (shared across all workers)
+    if get_model_status("rolled_back") == "true":
+        reason = get_model_status("rollback_reason")
+        log.warning(f"System is rolled back ({reason}), returning null prediction")
         return _null_prediction(file_id, user_id)
 
     # Step 1 — read file bytes
@@ -234,7 +218,7 @@ async def predict(
         log.warning(f"Text extraction returned empty for file {file_id}")
         extracted_text = ""
 
-    # Step 3 — check custom categories (Layer 2: few-shot prototype matching)
+    # Step 3 — check custom categories
     custom_tag   = None
     custom_score = 0.0
 
@@ -286,14 +270,14 @@ async def predict(
         f"latency={prediction_response['latency_ms']}ms"
     )
 
-    # ── Record Prometheus metrics ────────────────────────────────────────────
+    # ── Prometheus metrics ───────────────────────────────────────────────────
     prediction_counter.labels(
         label=prediction_response["predicted_tag"],
         action=prediction_response["action"]
     ).inc()
     confidence_histogram.observe(prediction_response["confidence"])
 
-    # Log to PostgreSQL for Viral's drift monitoring
+    # ── Log to PostgreSQL for drift monitoring ───────────────────────────────
     log_prediction(
         file_id           = prediction_response["file_id"],
         user_id           = prediction_response["user_id"],
@@ -310,9 +294,7 @@ async def predict(
 
 @app.post("/feedback")
 def feedback(request: FeedbackRequest):
-    """
-    Receives user feedback (accept/reject/correction) and saves to PostgreSQL.
-    """
+    """Receives user feedback and saves to PostgreSQL."""
     try:
         feedback_type = FeedbackType(request.feedback_type)
     except ValueError:
@@ -334,7 +316,6 @@ def feedback(request: FeedbackRequest):
         extraction_method = request.extraction_method,
     )
 
-    # ── Record Prometheus metrics ────────────────────────────────────────────
     feedback_counter.labels(feedback_type=request.feedback_type).inc()
     if request.feedback_type == "corrected":
         correction_counter.inc()
@@ -347,12 +328,9 @@ def feedback(request: FeedbackRequest):
 
 @app.post("/register-category")
 def register_category_endpoint(request: RegisterCategoryRequest):
-    """Creates a custom category for a user from 3-10 example files."""
+    """Creates a custom category for a user."""
     if predictor is None or predictor.sbert_model is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Model not loaded yet — try again in a few seconds"
-        )
+        raise HTTPException(status_code=503, detail="Model not loaded yet")
 
     result = register_category(
         user_id       = request.user_id,
@@ -363,7 +341,6 @@ def register_category_endpoint(request: RegisterCategoryRequest):
 
     if not result["success"]:
         raise HTTPException(status_code=400, detail=result["message"])
-
     return result
 
 
@@ -371,11 +348,7 @@ def register_category_endpoint(request: RegisterCategoryRequest):
 def list_categories(user_id: str):
     """Returns all custom categories for a user."""
     categories = list_user_categories(user_id)
-    return {
-        "user_id":    user_id,
-        "categories": categories,
-        "count":      len(categories),
-    }
+    return {"user_id": user_id, "categories": categories, "count": len(categories)}
 
 
 @app.delete("/delete-category")
@@ -389,41 +362,30 @@ def delete_category_endpoint(request: DeleteCategoryRequest):
         "success": success,
         "message": (
             f"Category '{request.category_name}' deleted"
-            if success else
-            "Delete failed (logged server-side)"
+            if success else "Delete failed (logged server-side)"
         ),
     }
 
 
 # ---------------------------------------------------------------------------
-# Admin endpoints — called by monitor.py only, not by users
+# Admin endpoints — called by monitor.py only
 # ---------------------------------------------------------------------------
 
 @app.post("/admin/rollback")
 def admin_rollback(request: RollbackRequest):
     """
-    Triggers a rollback — monitor.py calls this when it detects a problem.
-
-    Effect: sets _rolled_back=True so /predict returns null predictions
-    instead of potentially bad model outputs. Safe for users — they just
-    don't get tag suggestions until the model is restored.
-
-    This endpoint is internal — it should not be exposed to the internet.
-    In production you would add an API key check here.
+    Triggers rollback — monitor.py calls this when it detects a problem.
+    Sets rolled_back=true in PostgreSQL so ALL workers stop serving predictions.
     """
-    global _rolled_back, _rollback_reason
-
-    _rolled_back = True
-    _rollback_reason = request.reason
+    set_model_status("rolled_back", "true")
+    set_model_status("rollback_reason", request.reason)
     rollback_counter.inc()
-
     log.warning(f"ROLLBACK TRIGGERED — reason: {request.reason}")
-
     return {
-        "success": True,
-        "rolled_back": True,
-        "reason": request.reason,
-        "message": "Model rolled back. /predict will return null predictions until restored.",
+        "success":      True,
+        "rolled_back":  True,
+        "reason":       request.reason,
+        "message":      "Model rolled back. /predict will return null predictions until restored.",
     }
 
 
@@ -431,21 +393,16 @@ def admin_rollback(request: RollbackRequest):
 def admin_restore():
     """
     Restores normal prediction after a rollback.
-    Called by monitor.py when a new good model is promoted,
-    or manually by the team after investigating.
+    Called by monitor.py when a new good model is promoted.
     """
-    global _rolled_back, _rollback_reason
-
-    previous_reason = _rollback_reason
-    _rolled_back = False
-    _rollback_reason = ""
-
-    log.info(f"ROLLBACK RESTORED — was rolled back due to: {previous_reason}")
-
+    previous_reason = get_model_status("rollback_reason")
+    set_model_status("rolled_back", "false")
+    set_model_status("rollback_reason", "")
+    log.info(f"ROLLBACK RESTORED — was: {previous_reason}")
     return {
-        "success": True,
+        "success":     True,
         "rolled_back": False,
-        "message": "Model restored. /predict will return predictions normally.",
+        "message":     "Model restored. /predict will return predictions normally.",
     }
 
 
@@ -453,13 +410,9 @@ def admin_restore():
 def admin_load_model(request: LoadModelRequest):
     """
     Hot-reloads the model without restarting the container.
-    Called by monitor.py when a new model version is promoted to Production.
-
-    Args:
-        bundle_path: optional path to the new model bundle.
-                     If not provided, reloads from the default BUNDLE_PATH.
+    Called by monitor.py when a new model version is promoted.
     """
-    global predictor, _rolled_back, _rollback_reason
+    global predictor
 
     import os
     from pathlib import Path
@@ -475,44 +428,36 @@ def admin_load_model(request: LoadModelRequest):
     try:
         log.info(f"Hot-reloading model from {bundle_path}...")
         old_version = predictor.model_version if predictor else "none"
-
-        # Set env var so Predictor picks up the new path
         os.environ["BUNDLE_PATH"] = bundle_path
         predictor = Predictor()
 
-        # Clear rollback state if model loaded successfully
-        _rolled_back = False
-        _rollback_reason = ""
+        # Clear rollback state on successful load
+        set_model_status("rolled_back", "false")
+        set_model_status("rollback_reason", "")
 
         log.info(f"Model reloaded: {old_version} → {predictor.model_version}")
-
         return {
-            "success": True,
+            "success":     True,
             "old_version": old_version,
             "new_version": predictor.model_version,
             "bundle_path": bundle_path,
-            "message": "Model reloaded successfully. Rollback state cleared.",
+            "message":     "Model reloaded successfully. Rollback state cleared.",
         }
-
     except Exception as exc:
         log.error(f"Failed to reload model: {exc}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Model reload failed: {exc}"
-        )
+        raise HTTPException(status_code=500, detail=f"Model reload failed: {exc}")
 
 
 @app.get("/admin/status")
 def admin_status():
-    """
-    Returns current system status for monitor.py to read.
-    Includes rollback state, model version, and basic metrics.
-    """
+    """Returns current system status for monitor.py to read."""
+    rolled_back = get_model_status("rolled_back") == "true"
+    reason = get_model_status("rollback_reason")
     return {
         "model_version":   predictor.model_version if predictor else None,
         "model_mode":      predictor._mode if predictor else None,
-        "rolled_back":     _rolled_back,
-        "rollback_reason": _rollback_reason if _rolled_back else None,
+        "rolled_back":     rolled_back,
+        "rollback_reason": reason if rolled_back else None,
     }
 
 
@@ -521,7 +466,6 @@ def admin_status():
 # ---------------------------------------------------------------------------
 
 def _null_prediction(file_id: str, user_id: str) -> JSONResponse:
-    """Fail-open response for errors and rollback state."""
     return JSONResponse(content={
         "file_id":          file_id,
         "user_id":          user_id,
