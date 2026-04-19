@@ -1,7 +1,8 @@
 data:
   # Local path (running from training/ folder directly)
   # On Chameleon via Docker, this is overridden by the volume mount
-  path: ../data/artifacts/versions/v2/train.parquet
+  path: ../data/artifacts/versions/v4/train.parquet
+  eval_path: ../data/artifacts/versions/v4/eval.parquet
   text_col: extracted_text
   label_col: label
   allowed_labels:
@@ -14,10 +15,11 @@ data:
     - Solution
 
 split:
-  train_size: 0.60
-  val_size: 0.20
-  test_size: 0.20
+  train_size: 0.70
+  val_size: 0.15
+  test_size: 0.15
   random_state: 42
+  val_from_eval_size: 0.5
 
 mlflow:
   experiment_name: nextcloud-doc-tagger-training

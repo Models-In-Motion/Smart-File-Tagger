@@ -1,6 +1,7 @@
 data:
   # Docker path — used when running via docker-compose on Chameleon
-  path: /app/data_artifacts/versions/v2/train.parquet
+  path: /app/data_artifacts/versions/v4/train.parquet
+  eval_path: /app/data_artifacts/versions/v4/eval.parquet
   text_col: extracted_text
   label_col: label
   allowed_labels:
@@ -13,10 +14,11 @@ data:
     - Solution
 
 split:
-  train_size: 0.60
-  val_size: 0.20
-  test_size: 0.20
+  train_size: 0.70
+  val_size: 0.15
+  test_size: 0.15
   random_state: 42
+  val_from_eval_size: 0.5
 
 mlflow:
   experiment_name: nextcloud-doc-tagger-training
