@@ -55,6 +55,29 @@ services:
       timeout: 10s
       retries: 3
 
+  nextcloud:
+    image: nextcloud:27
+    ports:
+      - "8080:80"
+    volumes:
+      - nextcloud_data:/var/www/html
+      - ./nextcloud-app:/var/www/html/custom_apps/smartfiletagger:ro
+    environment:
+      NEXTCLOUD_ADMIN_USER: admin
+      NEXTCLOUD_ADMIN_PASSWORD: admin
+      NEXTCLOUD_TRUSTED_DOMAINS: localhost nextcloud
+      SIDECAR_URL: http://serving:8000
+      NEXTCLOUD_INTERNAL_URL: http://nextcloud
+    depends_on:
+      serving:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/status.php"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
   training:
     build:
       context: ./training
@@ -263,3 +286,4 @@ volumes:
   postgres_data:
   mlflow_artifacts:
   grafana_data:
+  nextcloud_data:

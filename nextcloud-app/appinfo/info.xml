@@ -16,7 +16,7 @@
     <namespace>SmartFileTagger</namespace>
     <category>files</category>
     <dependencies>
-        <nextcloud min-version="27" max-version="29"/>
+        <nextcloud min-version="27" max-version="30"/>
     </dependencies>
     <settings>
         <personal>OCA\SmartFileTagger\Settings\PersonalSettings</personal>

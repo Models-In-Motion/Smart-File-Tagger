@@ -8,8 +8,10 @@ Assisted by Claude Sonnet 4.5
 
 import time
 import logging
+import os
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
@@ -154,6 +156,11 @@ class LoadModelRequest(BaseModel):
     bundle_path: str | None = None
 
 
+class NextcloudWebhookRequest(BaseModel):
+    event: dict
+    user: dict
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -290,6 +297,68 @@ async def predict(
     )
 
     return JSONResponse(content=prediction_response)
+
+
+@app.post("/nextcloud/predict")
+async def nextcloud_predict(request: NextcloudWebhookRequest):
+    """
+    Receives Nextcloud Flow webhook and fetches file via WebDAV.
+    Alternative to TagController.php calling /predict directly.
+    """
+    node = request.event.get("node", {})
+    file_id = str(node.get("id", "unknown"))
+    file_path = node.get("path", "")
+    user_id = request.user.get("uid", "unknown")
+
+    nextcloud_url = os.getenv("NEXTCLOUD_INTERNAL_URL", "http://nextcloud")
+    # file_path format from webhook: "/admin/files/lecture.txt"
+    # WebDAV format needed: "/remote.php/dav/files/admin/lecture.txt"
+    # Strip the /username/files/ prefix and rebuild correctly
+    parts = file_path.strip("/").split("/", 2)
+    # parts = ["admin", "files", "lecture.txt"]
+    if len(parts) >= 3 and parts[1] == "files":
+        webdav_path = f"/remote.php/dav/files/{parts[0]}/{parts[2]}"
+    else:
+        webdav_path = f"/remote.php/dav/files{file_path}"
+    webdav_url = f"{nextcloud_url}{webdav_path}"
+    nc_user = os.getenv("NEXTCLOUD_ADMIN_USER", "admin")
+    nc_pass = os.getenv("NEXTCLOUD_ADMIN_PASSWORD", "admin")
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(webdav_url, auth=(nc_user, nc_pass), timeout=30)
+            resp.raise_for_status()
+            file_bytes = resp.content
+            filename = file_path.split("/")[-1]
+    except Exception as exc:
+        log.error(f"Failed to fetch file from Nextcloud WebDAV: {exc}")
+        return {"success": False, "error": str(exc)}
+
+    extracted_text, _ = extract_text(file_bytes, filename)
+    if not extracted_text:
+        extracted_text = ""
+
+    result = predictor.predict(text=extracted_text, user_id=user_id)
+
+    log_prediction(
+        file_id=file_id,
+        user_id=user_id,
+        predicted_tag=result.predicted_tag,
+        confidence=result.confidence,
+        action=result.action,
+        model_version=result.model_version,
+        category_type="fixed_baseline",
+        latency_ms=result.latency_ms,
+    )
+
+    return {
+        "file_id": file_id,
+        "user_id": user_id,
+        "predicted_tag": result.predicted_tag,
+        "confidence": result.confidence,
+        "action": result.action,
+        "model_version": result.model_version,
+    }
 
 
 @app.post("/feedback")

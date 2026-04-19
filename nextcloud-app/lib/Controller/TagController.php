@@ -6,124 +6,183 @@ use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\JSONResponse;
 use OCP\IRequest;
 use OCP\IUserSession;
+use OCP\Notification\IManager as INotificationManager;
 use OCP\SystemTag\ISystemTagManager;
 use OCP\SystemTag\ISystemTagObjectMapper;
-use OCP\Files\IRootFolder;
-use OCP\Notification\IManager as INotificationManager;
 
-/**
- * TagController
- *
- * Sits between Nextcloud and the Python sidecar.
- * Responsibilities:
- *   1. Receive the Flow webhook when a file is uploaded
- *   2. Forward to sidecar POST /predict
- *   3a. If confidence > 0.85 → write tag immediately via ISystemTagManager
- *   3b. If confidence 0.5–0.85 → store pending suggestion, push notification to user
- *   4. Handle user confirm/reject actions from the JS frontend
- */
 class TagController extends Controller {
-
     private ISystemTagManager $tagManager;
     private ISystemTagObjectMapper $tagMapper;
-    private IRootFolder $rootFolder;
     private IUserSession $userSession;
     private INotificationManager $notificationManager;
     private string $sidecarUrl;
+    private string $nextcloudInternalUrl;
+    private string $suggestionStorePath;
 
     public function __construct(
         string $appName,
         IRequest $request,
         ISystemTagManager $tagManager,
         ISystemTagObjectMapper $tagMapper,
-        IRootFolder $rootFolder,
         IUserSession $userSession,
         INotificationManager $notificationManager
     ) {
         parent::__construct($appName, $request);
-        $this->tagManager          = $tagManager;
-        $this->tagMapper           = $tagMapper;
-        $this->rootFolder          = $rootFolder;
-        $this->userSession         = $userSession;
+        $this->tagManager = $tagManager;
+        $this->tagMapper = $tagMapper;
+        $this->userSession = $userSession;
         $this->notificationManager = $notificationManager;
-
-        // Sidecar URL is injected via environment variable in docker-compose
-        // Falls back to localhost for local dev
         $this->sidecarUrl = getenv('SIDECAR_URL') ?: 'http://sidecar:8000';
+        $this->nextcloudInternalUrl = getenv('NEXTCLOUD_INTERNAL_URL') ?: 'http://nextcloud';
+        $this->suggestionStorePath = sys_get_temp_dir() . '/smartfiletagger_suggestions.json';
     }
 
     /**
-     * POST /apps/smartfiletagger/predict
-     *
-     * Called by Nextcloud Flow on every file upload.
-     * Payload from Flow: { "fileId": "123", "filePath": "/admin/files/doc.pdf" }
-     *
      * @NoAdminRequired
      * @NoCSRFRequired
+     * @PublicPage
      */
     public function predict(): JSONResponse {
-        $fileId   = $this->request->getParam('fileId');
-        $filePath = $this->request->getParam('filePath');
-        $userId   = $this->userSession->getUser()->getUID();
+        try {
+            // Try multiple ways to read the request body
+            // Nextcloud Webhooks app may send different content types
+            $payload = null;
 
-        if (!$fileId || !$filePath) {
-            return new JSONResponse(['error' => 'missing fileId or filePath'], 400);
+            // Attempt 1: getParams() - works for form-encoded and some JSON
+            $params = $this->request->getParams();
+
+            // Attempt 2: raw input stream
+            $rawBody = file_get_contents('php://input');
+
+            // Attempt 3: try JSON decode of raw body
+            if (!empty($rawBody)) {
+                $decoded = json_decode($rawBody, true);
+                if (is_array($decoded)) {
+                    $payload = $decoded;
+                }
+            }
+
+            // Fall back to getParams() if raw body didn't work
+            if ($payload === null && !empty($params)) {
+                $payload = $params;
+                // params might have JSON as a string value, try to decode
+                foreach ($params as $key => $value) {
+                    if (is_string($value)) {
+                        $decoded = json_decode($value, true);
+                        if (is_array($decoded)) {
+                            $payload = $decoded;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Log everything for debugging
+            \OC::$server->getLogger()->warning(
+                'SmartFileTagger debug - rawBody: ' . substr($rawBody, 0, 500) .
+                ' | params: ' . json_encode($params) .
+                ' | payload: ' . json_encode($payload),
+                ['app' => 'smartfiletagger']
+            );
+
+            if ($payload === null || !is_array($payload)) {
+                return new JSONResponse([
+                    'success' => false,
+                    'error' => 'Could not parse payload. rawBody: ' . substr($rawBody, 0, 200) . ' params: ' . json_encode($params),
+                ], 400);
+            }
+
+            // Support both payload formats:
+            // Format 1 (Nextcloud Webhooks app): flat with "node" at top level
+            // Format 2 (manual/legacy): nested under "event.node" with "user.uid"
+            if (isset($payload['node'])) {
+                // Format 1 — Nextcloud Webhooks app format
+                $node = $payload['node'];
+                $filePath = (string)($node['path'] ?? '');
+                $fileId = (string)($node['id'] ?? '');
+                // Extract user from path: /admin/files/sol_debug.txt -> admin
+                $pathParts = explode('/', ltrim($filePath, '/'));
+                $userId = $pathParts[0] ?? 'admin';
+            } else {
+                // Format 2 — legacy/manual format
+                $node = $payload['event']['node'] ?? [];
+                $user = $payload['user'] ?? [];
+                $fileId = (string)($node['id'] ?? '');
+                $filePath = (string)($node['path'] ?? '');
+                $userId = (string)($user['uid'] ?? '');
+            }
+
+            $fileName = (string)($node['name'] ?? basename($filePath));
+
+            if ($fileId === '' || $filePath === '' || $userId === '') {
+                return new JSONResponse([
+                    'success' => false,
+                    'error' => 'Missing file_id, file_path, or user_id. Got: ' . json_encode($payload),
+                ], 400);
+            }
+
+            [$fileBytes, $resolvedFileName] = $this->fetchFileFromWebDav($userId, $filePath, $fileName);
+
+            $prediction = $this->callSidecarPredict($fileBytes, $resolvedFileName, $userId, (string)$fileId);
+            $predictedTag = (string)($prediction['predicted_tag'] ?? '');
+            $confidence = (float)($prediction['confidence'] ?? 0.0);
+            $action = (string)($prediction['action'] ?? 'no_tag');
+
+            if ($action === 'auto_apply' && $predictedTag !== '') {
+                $this->applyTag((string)$fileId, $predictedTag);
+                error_log("SmartFileTagger auto-applied tag '{$predictedTag}' to file {$fileId}");
+            } elseif ($action === 'suggest' && $predictedTag !== '') {
+                $this->storePendingSuggestion($userId, (string)$fileId, [
+                    'file_id' => (string)$fileId,
+                    'file_path' => $filePath,
+                    'predicted_tag' => $predictedTag,
+                    'confidence' => $confidence,
+                    'action' => $action,
+                    'model_response' => $prediction,
+                    'created_at' => gmdate('c'),
+                ]);
+                $this->pushSuggestionNotification($userId, (string)$fileId, $filePath, $predictedTag, $confidence);
+                error_log("SmartFileTagger stored suggestion '{$predictedTag}' for file {$fileId}");
+            } else {
+                error_log("SmartFileTagger no_tag for file {$fileId}");
+            }
+
+            return new JSONResponse([
+                'success' => true,
+                'file_id' => (string)$fileId,
+                'user_id' => $userId,
+                'predicted_tag' => $predictedTag,
+                'confidence' => $confidence,
+                'action' => $action,
+                'model_response' => $prediction,
+            ]);
+        } catch (\Throwable $e) {
+            \OC::$server->getLogger()->error(
+                'SmartFileTagger predict webhook failed: ' . $e->getMessage(),
+                ['app' => 'smartfiletagger', 'exception' => $e]
+            );
+            return new JSONResponse([
+                'success' => false,
+                'error' => $e->getMessage(),
+            ], 500);
         }
-
-        // Forward to Python sidecar
-        $sidecarResponse = $this->callSidecar('/predict', [
-            'file_id'   => $fileId,
-            'file_path' => $filePath,
-            'user_id'   => $userId,
-        ]);
-
-        // Sidecar unavailable — fail open, do nothing
-        if ($sidecarResponse === null) {
-            return new JSONResponse(['status' => 'sidecar_unavailable'], 200);
-        }
-
-        $tag        = $sidecarResponse['tag']        ?? null;
-        $confidence = $sidecarResponse['confidence'] ?? 0.0;
-        $explanation= $sidecarResponse['explanation']?? null;
-
-        // No tag predicted
-        if (!$tag) {
-            return new JSONResponse(['status' => 'no_prediction'], 200);
-        }
-
-        if ($confidence >= 0.85) {
-            // High confidence — apply tag immediately
-            $this->applyTag($fileId, $tag);
-            return new JSONResponse(['status' => 'tagged', 'tag' => $tag]);
-        }
-
-        if ($confidence >= 0.50) {
-            // Medium confidence — push a suggestion notification to the user
-            $this->pushSuggestionNotification($userId, $fileId, $filePath, $tag, $confidence, $explanation);
-            return new JSONResponse(['status' => 'suggested', 'tag' => $tag]);
-        }
-
-        // Low confidence — do nothing, let user tag manually
-        return new JSONResponse(['status' => 'low_confidence'], 200);
     }
 
     /**
-     * POST /apps/smartfiletagger/confirm
-     *
-     * User clicked "Yes" on a suggestion notification.
-     * Applies the tag and logs positive feedback to sidecar.
-     *
      * @NoAdminRequired
      */
     public function confirm(): JSONResponse {
-        $fileId  = $this->request->getParam('fileId');
-        $tag     = $this->request->getParam('tag');
-        $userId  = $this->userSession->getUser()->getUID();
+        $fileId  = (string)$this->request->getParam('fileId');
+        $tag     = (string)$this->request->getParam('tag');
+        $user = $this->userSession->getUser();
+        $userId = $user ? $user->getUID() : '';
+
+        if ($fileId === '' || $tag === '' || $userId === '') {
+            return new JSONResponse(['success' => false, 'error' => 'Missing fileId/tag/user'], 400);
+        }
 
         $this->applyTag($fileId, $tag);
-
-        // Log acceptance as positive feedback for retraining
-        $this->callSidecar('/feedback', [
+        $this->callSidecarJson('/feedback', [
             'file_id'       => $fileId,
             'predicted_tag' => $tag,
             'correct_tag'   => $tag,
@@ -131,73 +190,197 @@ class TagController extends Controller {
             'user_id'       => $userId,
         ]);
 
-        return new JSONResponse(['status' => 'confirmed', 'tag' => $tag]);
+        return new JSONResponse(['success' => true, 'status' => 'confirmed', 'tag' => $tag]);
     }
 
     /**
-     * POST /apps/smartfiletagger/reject
-     *
-     * User clicked "No" on a suggestion notification.
-     * Logs negative feedback. User tags manually afterward.
-     *
      * @NoAdminRequired
      */
     public function reject(): JSONResponse {
-        $fileId      = $this->request->getParam('fileId');
-        $tag         = $this->request->getParam('tag');
-        $correctTag  = $this->request->getParam('correctTag'); // optional — user may specify
-        $userId      = $this->userSession->getUser()->getUID();
+        $fileId = (string)$this->request->getParam('fileId');
+        $tag = (string)$this->request->getParam('tag');
+        $correctTag = (string)$this->request->getParam('correctTag', '');
+        $user = $this->userSession->getUser();
+        $userId = $user ? $user->getUID() : '';
 
-        $this->callSidecar('/feedback', [
+        if ($fileId === '' || $tag === '' || $userId === '') {
+            return new JSONResponse(['success' => false, 'error' => 'Missing fileId/tag/user'], 400);
+        }
+
+        $this->callSidecarJson('/feedback', [
             'file_id'       => $fileId,
             'predicted_tag' => $tag,
-            'correct_tag'   => $correctTag,
+            'correct_tag'   => $correctTag !== '' ? $correctTag : null,
             'accepted'      => false,
             'user_id'       => $userId,
         ]);
 
-        return new JSONResponse(['status' => 'rejected']);
+        return new JSONResponse(['success' => true, 'status' => 'rejected']);
     }
 
-    // -------------------------------------------------------------------------
-    // Private helpers
-    // -------------------------------------------------------------------------
+    private function fetchFileFromWebDav(string $userId, string $filePath, string $fallbackName): array {
+        $normalizedPath = ltrim($filePath, '/');
+        $userPrefix = $userId . '/files/';
+        if (str_starts_with($normalizedPath, $userPrefix)) {
+            $normalizedPath = substr($normalizedPath, strlen($userPrefix));
+        } elseif (str_starts_with($normalizedPath, 'files/')) {
+            $normalizedPath = substr($normalizedPath, strlen('files/'));
+        } elseif (str_starts_with($normalizedPath, $userId . '/')) {
+            $normalizedPath = substr($normalizedPath, strlen($userId . '/'));
+        }
 
-    /**
-     * Write a tag to a file using Nextcloud's ISystemTagManager.
-     * Creates the tag if it doesn't already exist.
-     */
+        $pathParts = array_filter(explode('/', $normalizedPath), static fn(string $part): bool => $part !== '');
+        $encodedPath = implode('/', array_map('rawurlencode', $pathParts));
+        $url = rtrim($this->nextcloudInternalUrl, '/') . '/remote.php/dav/files/' . rawurlencode($userId);
+        if ($encodedPath !== '') {
+            $url .= '/' . $encodedPath;
+        }
+
+        $ncUser = getenv('NEXTCLOUD_ADMIN_USER') ?: 'admin';
+        $ncPass = getenv('NEXTCLOUD_ADMIN_PASSWORD') ?: 'admin';
+        $headers = "Authorization: Basic " . base64_encode($ncUser . ':' . $ncPass) . "\r\n";
+
+        $context = stream_context_create([
+            'http' => [
+                'method' => 'GET',
+                'header' => $headers,
+                'timeout' => 30,
+                'ignore_errors' => true,
+            ],
+        ]);
+
+        $data = @file_get_contents($url, false, $context);
+        $statusCode = $this->extractHttpStatusCode($http_response_header ?? []);
+
+        if ($data === false || $statusCode < 200 || $statusCode >= 300) {
+            throw new \RuntimeException('Failed to fetch file from WebDAV (status ' . $statusCode . ')');
+        }
+
+        $filename = $fallbackName !== '' ? $fallbackName : basename($normalizedPath);
+        return [$data, $filename];
+    }
+
+    private function callSidecarPredict(string $fileBytes, string $filename, string $userId, string $fileId): array {
+        $url = rtrim($this->sidecarUrl, '/') . '/predict';
+        $boundary = '----SmartFileTaggerBoundary' . md5((string)microtime(true));
+        $eol = "\r\n";
+
+        $body = '';
+        $body .= '--' . $boundary . $eol;
+        $body .= 'Content-Disposition: form-data; name="file"; filename="' . addslashes($filename) . '"' . $eol;
+        $body .= 'Content-Type: application/octet-stream' . $eol . $eol;
+        $body .= $fileBytes . $eol;
+        $body .= '--' . $boundary . $eol;
+        $body .= 'Content-Disposition: form-data; name="user_id"' . $eol . $eol;
+        $body .= $userId . $eol;
+        $body .= '--' . $boundary . $eol;
+        $body .= 'Content-Disposition: form-data; name="file_id"' . $eol . $eol;
+        $body .= (string)$fileId . $eol;
+        $body .= '--' . $boundary . '--' . $eol;
+
+        $context = stream_context_create([
+            'http' => [
+                'method' => 'POST',
+                'header' => [
+                    'Content-Type: multipart/form-data; boundary=' . $boundary,
+                    'Content-Length: ' . strlen($body),
+                ],
+                'content' => $body,
+                'timeout' => 30,
+                'ignore_errors' => true,
+            ],
+        ]);
+
+        $response = @file_get_contents($url, false, $context);
+        $statusCode = $this->extractHttpStatusCode($http_response_header ?? []);
+        if ($response === false || $statusCode < 200 || $statusCode >= 300) {
+            throw new \RuntimeException('Sidecar /predict request failed with status ' . $statusCode);
+        }
+
+        $decoded = json_decode($response, true);
+        if (!is_array($decoded)) {
+            throw new \RuntimeException('Invalid JSON response from sidecar /predict');
+        }
+
+        return $decoded;
+    }
+
+    private function callSidecarJson(string $endpoint, array $payload): ?array {
+        $url = rtrim($this->sidecarUrl, '/') . $endpoint;
+        $body = json_encode($payload);
+
+        if ($body === false) {
+            return null;
+        }
+
+        $context = stream_context_create([
+            'http' => [
+                'method' => 'POST',
+                'header' => [
+                    'Content-Type: application/json',
+                    'Content-Length: ' . strlen($body),
+                ],
+                'content' => $body,
+                'timeout' => 10,
+                'ignore_errors' => true,
+            ],
+        ]);
+
+        $response = @file_get_contents($url, false, $context);
+        $statusCode = $this->extractHttpStatusCode($http_response_header ?? []);
+        if ($response === false || $statusCode < 200 || $statusCode >= 300) {
+            return null;
+        }
+
+        $decoded = json_decode($response, true);
+        return is_array($decoded) ? $decoded : null;
+    }
+
     private function applyTag(string $fileId, string $tagName): void {
         try {
-            // Get or create the tag (userVisible=true, userAssignable=true)
             try {
                 $tag = $this->tagManager->getTag($tagName, true, true);
             } catch (\OCP\SystemTag\TagNotFoundException $e) {
                 $tag = $this->tagManager->createTag($tagName, true, true);
             }
 
-            // Map the tag to the file node
-            $this->tagMapper->assignTags((string)$fileId, 'files', [$tag->getId()]);
-        } catch (\Exception $e) {
-            // Log but don't throw — tag failure must never crash the flow
+            if (method_exists($this->tagManager, 'assignTags')) {
+                $this->tagManager->assignTags((string)$fileId, 'files', [$tag->getId()]);
+            } else {
+                $this->tagMapper->assignTags((string)$fileId, 'files', [$tag->getId()]);
+            }
+        } catch (\Throwable $e) {
             \OC::$server->getLogger()->error(
                 'SmartFileTagger: failed to apply tag ' . $tagName . ' to file ' . $fileId,
-                ['exception' => $e]
+                ['app' => 'smartfiletagger', 'exception' => $e]
             );
         }
     }
 
-    /**
-     * Push a Nextcloud notification to the user with Accept/Reject actions.
-     * The notification appears in the Nextcloud notification bell (top bar).
-     */
+    private function storePendingSuggestion(string $userId, string $fileId, array $suggestion): void {
+        $data = [];
+        if (is_file($this->suggestionStorePath)) {
+            $raw = @file_get_contents($this->suggestionStorePath);
+            $parsed = json_decode((string)$raw, true);
+            if (is_array($parsed)) {
+                $data = $parsed;
+            }
+        }
+
+        if (!isset($data[$userId]) || !is_array($data[$userId])) {
+            $data[$userId] = [];
+        }
+        $data[$userId][$fileId] = $suggestion;
+
+        @file_put_contents($this->suggestionStorePath, json_encode($data, JSON_PRETTY_PRINT), LOCK_EX);
+    }
+
     private function pushSuggestionNotification(
         string $userId,
         string $fileId,
         string $filePath,
         string $tag,
-        float  $confidence,
-        ?string $explanation
+        float $confidence
     ): void {
         $notification = $this->notificationManager->createNotification();
         $notification
@@ -205,64 +388,22 @@ class TagController extends Controller {
             ->setUser($userId)
             ->setDateTime(new \DateTime())
             ->setObject('file', $fileId)
-            ->setSubject('suggestion', [
-                'tag'         => $tag,
-                'confidence'  => round($confidence * 100),
-                'explanation' => $explanation,
-                'filePath'    => $filePath,
-            ])
-            // Two inline actions — rendered as buttons in the notification
-            ->addAction(
-                $notification->createAction()
-                    ->setLabel('confirm')
-                    ->setLink(
-                        \OC::$server->getURLGenerator()->linkToRoute(
-                            'smartfiletagger.tag.confirm'
-                        ),
-                        'POST'
-                    )
-                    ->setPrimary(true)
-            )
-            ->addAction(
-                $notification->createAction()
-                    ->setLabel('reject')
-                    ->setLink(
-                        \OC::$server->getURLGenerator()->linkToRoute(
-                            'smartfiletagger.tag.reject'
-                        ),
-                        'POST'
-                    )
-                    ->setPrimary(false)
-            );
+            ->setSubject('suggested_tag', [
+                'tag'        => $tag,
+                'confidence' => round($confidence * 100),
+                'filePath'   => $filePath,
+            ]);
 
         $this->notificationManager->notify($notification);
     }
 
-    /**
-     * Make a POST request to the Python sidecar.
-     * Returns decoded JSON array on success, null on failure.
-     * Failure must always be handled gracefully by the caller (fail-open).
-     */
-    private function callSidecar(string $endpoint, array $payload): ?array {
-        $url = rtrim($this->sidecarUrl, '/') . $endpoint;
-
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_POST           => true,
-            CURLOPT_POSTFIELDS     => json_encode($payload),
-            CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => 5, // never block Nextcloud for more than 5s
-        ]);
-
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($response === false || $httpCode !== 200) {
-            return null;
+    private function extractHttpStatusCode(array $headers): int {
+        if (count($headers) === 0) {
+            return 0;
         }
-
-        return json_decode($response, true);
+        if (preg_match('/HTTP\/\d\.\d\s+(\d{3})/', (string)$headers[0], $matches) === 1) {
+            return (int)$matches[1];
+        }
+        return 0;
     }
 }
