@@ -27,3 +27,6 @@ gunicorn==21.2.0
 # Monitoring
 prometheus-fastapi-instrumentator==6.1.0  # auto-instruments FastAPI with request metrics
 prometheus-client==0.20.0                 # exposes custom counters and histograms
+
+# mlflow<2.16 pins numpy<2, which conflicts with numpy==2.0.2 above (joblib bundle).
+mlflow==2.16.2

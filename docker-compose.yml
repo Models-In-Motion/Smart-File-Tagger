@@ -239,6 +239,25 @@ services:
       - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
     depends_on:
       - prometheus
+  
+  monitor:
+    build:
+      context: ./serving
+      dockerfile: Dockerfile
+    environment:
+      DB_URL: postgresql://tagger:tagger@postgres:5432/tagger
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      SERVING_URL: http://serving:8000
+      PROMETHEUS_URL: http://prometheus:9090
+      CHECK_INTERVAL_SECONDS: "300"
+      ERROR_RATE_THRESHOLD: "0.05"
+      CORRECTION_RATE_THRESHOLD: "0.40"
+    depends_on:
+      - serving
+      - prometheus
+      - postgres
+      - mlflow
+    entrypoint: ["python", "monitor.py"]
 
 volumes:
   postgres_data:
