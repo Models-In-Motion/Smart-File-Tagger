@@ -22,6 +22,7 @@ import argparse
 import hashlib
 import json
 import re
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -122,26 +123,30 @@ class TextExtractor:
     backend: str
 
     @staticmethod
-    def autodetect(prefer_pypdf: bool = True) -> "TextExtractor":
-        if prefer_pypdf:
-            try:
-                import pypdf  # noqa: F401
-                return TextExtractor("pypdf")
-            except Exception:
-                pass
+    def autodetect() -> "TextExtractor":
+        try:
+            from pdfminer.high_level import extract_text  # noqa: F401
+            return TextExtractor("pdfminer")
+        except Exception:
+            pass
+
+        try:
+            import pypdf  # noqa: F401
+            return TextExtractor("pypdf")
+        except Exception:
+            pass
+
         if _command_exists("pdftotext"):
             return TextExtractor("pdftotext")
-        if _command_exists("strings"):
-            return TextExtractor("strings")
         return TextExtractor("none")
 
     def extract_pdf(self, path: Path) -> str:
+        if self.backend == "pdfminer":
+            return _extract_pdf_pdfminer(path)
         if self.backend == "pypdf":
             return _extract_pdf_pypdf(path)
         if self.backend == "pdftotext":
             return _extract_pdf_pdftotext(path)
-        if self.backend == "strings":
-            return _extract_pdf_strings(path)
         return ""
 
 
@@ -153,40 +158,74 @@ def _command_exists(cmd: str) -> bool:
         return False
 
 
+def _extract_pdf_pdfminer(path: Path) -> str:
+    timeout_secs = 20
+
+    def _handle_timeout(_signum, _frame):
+        raise TimeoutError("pdfminer extraction timed out")
+
+    old_handler = None
+    alarm_set = False
+    try:
+        old_handler = signal.signal(signal.SIGALRM, _handle_timeout)
+        signal.alarm(timeout_secs)
+        alarm_set = True
+    except Exception:
+        alarm_set = False
+
+    try:
+        from pdfminer.high_level import extract_text
+        text = extract_text(str(path))
+        return (text or "").strip()
+    except Exception:
+        return ""
+    finally:
+        if alarm_set:
+            try:
+                signal.alarm(0)
+                if old_handler is not None:
+                    signal.signal(signal.SIGALRM, old_handler)
+            except Exception:
+                pass
+
+
 def _extract_pdf_pypdf(path: Path) -> str:
+    timeout_secs = 20
+
+    def _handle_timeout(_signum, _frame):
+        raise TimeoutError("pypdf extraction timed out")
+
+    old_handler = None
+    alarm_set = False
+    try:
+        old_handler = signal.signal(signal.SIGALRM, _handle_timeout)
+        signal.alarm(timeout_secs)
+        alarm_set = True
+    except Exception:
+        # If SIGALRM is unavailable, continue without timeout.
+        alarm_set = False
+
     try:
         from pypdf import PdfReader
+
         reader = PdfReader(str(path))
         return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
     except Exception:
         return ""
+    finally:
+        if alarm_set:
+            try:
+                signal.alarm(0)
+                if old_handler is not None:
+                    signal.signal(signal.SIGALRM, old_handler)
+            except Exception:
+                pass
 
 
 def _extract_pdf_pdftotext(path: Path) -> str:
     try:
         proc = subprocess.run(["pdftotext", str(path), "-"], capture_output=True, text=True)
         return (proc.stdout or "").strip() if proc.returncode == 0 else ""
-    except Exception:
-        return ""
-
-
-def _extract_pdf_strings(path: Path) -> str:
-    try:
-        proc = subprocess.run(["strings", "-n", "6", str(path)], capture_output=True, text=True)
-        if proc.returncode != 0:
-            return ""
-        bad = ("%PDF", "endobj", "xref", "obj", "stream", "endstream",
-               "startxref", "/Type", "/Length", "FlateDecode")
-        kept = []
-        for line in (proc.stdout or "").splitlines():
-            s = line.strip()
-            if len(s) < 20 or any(t in s for t in bad):
-                continue
-            alpha = sum(ch.isalpha() for ch in s)
-            if alpha < 10 or alpha / max(len(s), 1) < 0.35:
-                continue
-            kept.append(s)
-        return "\n".join(kept).strip()
     except Exception:
         return ""
 
@@ -216,6 +255,21 @@ def join_nonempty(values: Iterable[str]) -> str:
 
 def normalize_text(text: str) -> str:
     return SPACES_RE.sub(" ", NONWORD_RE.sub(" ", text.lower().strip()))
+
+
+def _safe_utf8_text(value: str) -> str:
+    """Convert invalid unicode surrogates into escaped sequences so Arrow can write parquet."""
+    if not isinstance(value, str):
+        return value
+    return value.encode("utf-8", "backslashreplace").decode("utf-8")
+
+
+def sanitize_utf8_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Sanitize all string/object columns to avoid parquet write failures on malformed unicode."""
+    for col in df.columns:
+        if pd.api.types.is_string_dtype(df[col]) or df[col].dtype == object:
+            df[col] = df[col].apply(_safe_utf8_text)
+    return df
 
 
 def make_doc_id(source_url: str) -> str:
@@ -490,13 +544,40 @@ def legacy_course_records(
 # Checkpoint 1 — Ingestion validation
 # ---------------------------------------------------------------------------
 
-def validate_ingestion(df: pd.DataFrame) -> None:
+_PDF_GARBAGE_RE = re.compile(
+    r'<<\/Size|XRefStm|\/Root \d+|endobj|endstream', re.IGNORECASE
+)
+
+
+def _is_garbage_text(text: str) -> bool:
+    """Return True if the text looks like PDF binary garbage rather than readable content."""
+    if not isinstance(text, str) or not text:
+        return True
+    if _PDF_GARBAGE_RE.search(text):
+        return True
+    sample = text[:500]
+    alpha_ratio = sum(c.isalpha() or c.isspace() for c in sample) / max(len(sample), 1)
+    return alpha_ratio < 0.5
+
+
+def validate_ingestion(df: pd.DataFrame) -> pd.DataFrame:
     """
+    Performs ingestion quality checks and removes obvious garbage-text rows.
     Hard checks raise ValueError and block the parquet write.
     Warnings print but do not block.
     """
     errors:   list[str] = []
     warnings: list[str] = []
+
+    # Remove rows whose extracted_text is clearly PDF binary garbage.
+    if "extracted_text" in df.columns:
+        garbage_mask = df["extracted_text"].apply(_is_garbage_text)
+        n_garbage = int(garbage_mask.sum())
+        if n_garbage > 0:
+            warnings.append(
+                f"Removed {n_garbage} rows ({n_garbage/len(df)*100:.1f}%) with garbage extracted_text"
+            )
+            df = df[~garbage_mask].reset_index(drop=True)
 
     # ── Hard checks ──────────────────────────────────────────────────────────
 
@@ -583,6 +664,7 @@ def validate_ingestion(df: pd.DataFrame) -> None:
         raise ValueError("Ingestion validation failed")
 
     print("Status     : PASS")
+    return df
 
 
 # ---------------------------------------------------------------------------
@@ -688,6 +770,7 @@ def build_dataset(
         raise RuntimeError("No records extracted")
 
     df = pd.DataFrame(records)
+    df = sanitize_utf8_dataframe(df)
 
     before = len(df)
     if dedupe_by_text:
@@ -695,8 +778,8 @@ def build_dataset(
         df = df[~text_hashes.duplicated(keep="first")].copy()
     after = len(df)
 
+    df = validate_ingestion(df)
     validate_dataset(df)
-    validate_ingestion(df)
 
     output_parquet.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(output_parquet, index=False)
@@ -715,12 +798,14 @@ def build_dataset(
         "course_counts":       df["course_id"].value_counts().to_dict(),
     }
 
+    safe_summary_json = json.dumps(summary, indent=2).encode("utf-8", "backslashreplace").decode("utf-8")
+
     if summary_json:
         summary_json.parent.mkdir(parents=True, exist_ok=True)
-        summary_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        summary_json.write_text(safe_summary_json, encoding="utf-8")
 
     print("\n[INFO] Dataset build complete")
-    print(json.dumps(summary, indent=2))
+    print(safe_summary_json)
 
 
 # ---------------------------------------------------------------------------
@@ -736,7 +821,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-dedupe",       action="store_true")
     parser.add_argument("--dataset-version", type=str,   default="v1.0")
     parser.add_argument("--text-backend",    type=str,   default="auto",
-                        choices=["auto", "pypdf", "pdftotext", "strings", "none"])
+                        choices=["auto", "pdfminer", "pypdf", "pdftotext", "none"])
     return parser.parse_args()
 
 
