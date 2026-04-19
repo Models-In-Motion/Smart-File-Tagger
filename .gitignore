@@ -53,7 +53,6 @@ artifacts/production_feedback.jsonl
 data/artifacts/*.parquet
 data/artifacts/*.jsonl
 data/artifacts/*.json
-data/artifacts/versions/
 data/artifacts/courses/
 
 # Training outputs (keep dirs via training/artifacts/**/.gitkeep; do not commit bundles)
