@@ -294,6 +294,7 @@ async def predict(
         model_version     = prediction_response["model_version"],
         category_type     = prediction_response["category_type"],
         latency_ms        = prediction_response["latency_ms"],
+        extracted_text    = extracted_text,
     )
 
     return JSONResponse(content=prediction_response)

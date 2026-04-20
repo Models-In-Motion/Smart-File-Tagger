@@ -218,7 +218,7 @@
         const list = document.getElementById('sft-category-list');
         if (!list) return;
 
-        fetch(OC.generateUrl('/apps/smartfiletagger/categories'), {
+        fetch(OC.generateUrl('/apps/smartfiletagger/categories/list'), {
             headers: { 'requesttoken': OC.requestToken }
         })
         .then(r => r.json())

@@ -4,20 +4,25 @@ namespace OCA\SmartFileTagger\Controller;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\JSONResponse;
 use OCP\AppFramework\Http\TemplateResponse;
+use OCP\Files\File;
+use OCP\Files\IRootFolder;
 use OCP\IRequest;
 use OCP\IUserSession;
 
 class CategoryController extends Controller {
     private IUserSession $userSession;
+    private IRootFolder $rootFolder;
     private string $sidecarUrl;
 
     public function __construct(
         string $appName,
         IRequest $request,
-        IUserSession $userSession
+        IUserSession $userSession,
+        IRootFolder $rootFolder
     ) {
         parent::__construct($appName, $request);
         $this->userSession = $userSession;
+        $this->rootFolder = $rootFolder;
         $this->sidecarUrl = getenv('SIDECAR_URL') ?: 'http://sidecar:8000';
     }
 
@@ -48,7 +53,15 @@ class CategoryController extends Controller {
     public function register(): JSONResponse {
         $userId = $this->getUserId();
         $categoryName = (string)$this->request->getParam('categoryName', '');
-        $exampleFileIds = $this->request->getParam('exampleFileIds', []);
+        $exampleFileIds = $this->request->getParam('exampleFileIds', $this->request->getParam('exampleFileIds[]', []));
+
+        if (is_string($exampleFileIds)) {
+            $exampleFileIds = array_map('trim', explode(',', $exampleFileIds));
+        }
+        if (!is_array($exampleFileIds)) {
+            $exampleFileIds = [];
+        }
+        $exampleFileIds = array_values(array_filter(array_map('strval', $exampleFileIds), static fn(string $id): bool => $id !== ''));
 
         if ($categoryName === '' || count($exampleFileIds) < 3) {
             return new JSONResponse([
@@ -57,12 +70,22 @@ class CategoryController extends Controller {
             ], 400);
         }
 
-        // Fetch text from each example file via WebDAV and send to sidecar
+        // Read actual file content from Nextcloud by file ID.
+        // This is more reliable than resolving file IDs via OCS + WebDAV.
         $exampleTexts = [];
         foreach ($exampleFileIds as $fileId) {
-            // For simplicity, use the file ID as a placeholder text
-            // In production, fetch actual file content via WebDAV
-            $exampleTexts[] = "example file " . $fileId;
+            $text = $this->readTextFromFileId($userId, $fileId);
+            if ($text !== null && strlen($text) > 10) {
+                // Keep examples compact for category prototype creation.
+                $exampleTexts[] = mb_substr($text, 0, 1000);
+            }
+        }
+
+        if (count($exampleTexts) < 3) {
+            return new JSONResponse([
+                'success' => false,
+                'error' => 'Could not fetch content for at least 3 files. Got: ' . count($exampleTexts)
+            ], 400);
         }
 
         $payload = [
@@ -136,5 +159,44 @@ class CategoryController extends Controller {
         if ($response === false) return null;
         $decoded = json_decode($response, true);
         return is_array($decoded) ? $decoded : null;
+    }
+
+    private function readTextFromFileId(string $userId, string $fileId): ?string {
+        if ($fileId === '' || !ctype_digit($fileId)) {
+            return null;
+        }
+
+        try {
+            $userFolder = $this->rootFolder->getUserFolder($userId);
+            $nodes = $userFolder->getById((int)$fileId);
+            foreach ($nodes as $node) {
+                if (!$node instanceof File) {
+                    continue;
+                }
+                $stream = $node->fopen('r');
+                if (!is_resource($stream)) {
+                    continue;
+                }
+                $content = stream_get_contents($stream);
+                fclose($stream);
+                if (!is_string($content) || $content === '') {
+                    continue;
+                }
+                // Keep payload size bounded for category registration.
+                return mb_substr($content, 0, 12000);
+            }
+        } catch (\Throwable $e) {
+            \OC::$server->getLogger()->warning(
+                'SmartFileTagger category register: could not read file content',
+                [
+                    'app' => 'smartfiletagger',
+                    'user' => $userId,
+                    'file_id' => $fileId,
+                    'exception' => $e,
+                ]
+            );
+        }
+
+        return null;
     }
 }

@@ -106,8 +106,13 @@ def ensure_predictions_table_exists():
             model_version       TEXT        NOT NULL,
             extraction_method   TEXT,
             latency_ms          FLOAT,
+            extracted_text      TEXT,
             created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+
+        -- Add column if table already exists (for existing deployments)
+        ALTER TABLE predictions ADD COLUMN IF NOT EXISTS extracted_text TEXT;
+
         CREATE INDEX IF NOT EXISTS idx_predictions_created_at
             ON predictions (created_at);
         CREATE INDEX IF NOT EXISTS idx_predictions_tag
@@ -222,6 +227,7 @@ def log_prediction(
     category_type:      str | None = None,
     extraction_method:  str | None = None,
     latency_ms:         float | None = None,
+    extracted_text:     str | None = None,
 ) -> bool:
     """
     Logs every prediction to PostgreSQL for Viral's drift monitoring.
@@ -231,14 +237,21 @@ def log_prediction(
         INSERT INTO predictions (
             file_id, user_id, predicted_tag, confidence,
             action, category_type, model_version,
-            extraction_method, latency_ms
+            extraction_method, latency_ms, extracted_text
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
     values = (
-        file_id, user_id, predicted_tag, confidence,
-        action, category_type, model_version,
-        extraction_method, latency_ms,
+        file_id,
+        user_id,
+        predicted_tag,
+        confidence,
+        action,
+        category_type,
+        model_version,
+        extraction_method,
+        latency_ms,
+        extracted_text[:10000] if extracted_text else None,  # cap at 10k chars
     )
     try:
         conn = get_connection()
