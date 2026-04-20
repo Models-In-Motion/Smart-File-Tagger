@@ -1,17 +1,15 @@
 data:
-  # Docker path — used when running via docker-compose on Chameleon
-  path: /app/data_artifacts/versions/v6/train.parquet
-  eval_path: /app/data_artifacts/versions/v6/eval.parquet
+  # Docker integration default: Run B (5-label merged dataset)
+  path: /app/testing_results/parquet/run_b_train_llm_merged_ops.parquet
+  eval_path: /app/testing_results/parquet/run_b_eval_llm_merged_ops.parquet
   text_col: extracted_text
-  label_col: label
+  label_col: llm_label_merged
   allowed_labels:
     - Lecture Notes
     - Other
     - Problem Set
     - Exam
-    - Project
     - Reading
-    - Solution
 
 split:
   train_size: 0.70
