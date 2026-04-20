@@ -21,4 +21,5 @@
     <settings>
         <personal>OCA\SmartFileTagger\Settings\PersonalSettings</personal>
     </settings>
+    <bootstrap>OCA\SmartFileTagger\AppInfo\Application</bootstrap>
 </info>

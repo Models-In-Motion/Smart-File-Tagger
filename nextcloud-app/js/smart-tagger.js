@@ -1,225 +1,12 @@
 /**
- * smart-tagger.js
- *
- * Injected into the Nextcloud Files UI via the App Framework script hook.
- * Responsibilities:
- *   1. Listen for pending suggestion notifications
- *   2. Render an Accept / Reject banner in the file detail sidebar
- *   3. Send confirm/reject back to the PHP controller
- *   4. Render the LLM explanation if present
+ * smart-tagger.js — Nextcloud 27 compatible
+ * Uses OCA.Files.Sidebar and fetch() instead of jQuery $.get
  */
-
-(function (OCA, OC, $) {
+(function() {
     'use strict';
 
-    // -------------------------------------------------------------------------
-    // Suggestion banner — shown in the file detail sidebar (right panel)
-    // when the model confidence is between 0.50 and 0.85
-    // -------------------------------------------------------------------------
-
-    const SmartTaggerSidebar = {
-
-        /**
-         * Called by Nextcloud when the file detail sidebar opens.
-         * We check if there is a pending suggestion for this file.
-         */
-        attach: function (fileInfo) {
-            const fileId = fileInfo.get('id');
-            SmartTaggerSidebar.loadPendingSuggestion(fileId);
-        },
-
-        loadPendingSuggestion: function (fileId) {
-            $.get(
-                OC.generateUrl('/apps/smartfiletagger/suggestion/' + fileId),
-                function (data) {
-                    if (data && data.tag) {
-                        SmartTaggerSidebar.renderBanner(fileId, data);
-                    }
-                }
-            );
-        },
-
-        renderBanner: function (fileId, data) {
-            const confidence = Math.round(data.confidence * 100);
-            const explanation = data.explanation
-                ? `<p class="sft-explanation">${escapeHtml(data.explanation)}</p>`
-                : '';
-
-            const banner = $(`
-                <div class="sft-suggestion-banner" id="sft-banner-${fileId}">
-                    <div class="sft-banner-header">
-                        <span class="sft-icon">&#128196;</span>
-                        <strong>Suggested tag:</strong>
-                        <span class="sft-tag-pill">${escapeHtml(data.tag)}</span>
-                        <span class="sft-confidence">${confidence}% confidence</span>
-                    </div>
-                    ${explanation}
-                    <div class="sft-actions">
-                        <button class="sft-btn sft-btn-confirm" data-file-id="${fileId}" data-tag="${escapeHtml(data.tag)}">
-                            Apply tag
-                        </button>
-                        <button class="sft-btn sft-btn-reject" data-file-id="${fileId}" data-tag="${escapeHtml(data.tag)}">
-                            Not this tag
-                        </button>
-                    </div>
-                </div>
-            `);
-
-            // Inject at the top of the sidebar details panel
-            $('#app-sidebar .detailFileInfoContainer').prepend(banner);
-
-            // Wire up button actions
-            banner.find('.sft-btn-confirm').on('click', SmartTaggerSidebar.handleConfirm);
-            banner.find('.sft-btn-reject').on('click', SmartTaggerSidebar.handleReject);
-        },
-
-        handleConfirm: function () {
-            const fileId = $(this).data('file-id');
-            const tag    = $(this).data('tag');
-
-            $.post(OC.generateUrl('/apps/smartfiletagger/confirm'), { fileId, tag })
-                .done(function () {
-                    $(`#sft-banner-${fileId}`).replaceWith(
-                        `<div class="sft-confirmed">Tag applied: <strong>${escapeHtml(tag)}</strong></div>`
-                    );
-                    // Refresh the sidebar tags list so the new tag appears
-                    OCA.Files.Sidebar.reload();
-                })
-                .fail(function () {
-                    OC.Notification.showTemporary(t('smartfiletagger', 'Could not apply tag. Please try again.'));
-                });
-        },
-
-        handleReject: function () {
-            const fileId = $(this).data('file-id');
-            const tag    = $(this).data('tag');
-
-            $.post(OC.generateUrl('/apps/smartfiletagger/reject'), { fileId, tag })
-                .done(function () {
-                    $(`#sft-banner-${fileId}`).remove();
-                    OC.Notification.showTemporary(t('smartfiletagger', 'Feedback saved. Tag manually if needed.'));
-                });
-        },
-    };
-
-    // -------------------------------------------------------------------------
-    // Register as a Nextcloud Files sidebar plugin
-    // Nextcloud calls attach() whenever a file is selected in the Files UI
-    // -------------------------------------------------------------------------
-    OCA.Files.fileActions.registerAction({
-        name: 'SmartTaggerInfo',
-        displayName: t('smartfiletagger', 'Smart Tag Info'),
-        mime: 'all',
-        permissions: OC.PERMISSION_READ,
-        icon: OC.imagePath('smartfiletagger', 'tag'),
-        actionHandler: function (filename, context) {
-            const fileInfo = context.fileList.getModelForFile(filename);
-            SmartTaggerSidebar.attach(fileInfo);
-        }
-    });
-
-    // Also hook into sidebar open event so the banner loads automatically
-    $(document).on('click', '.filename', function () {
-        const fileId = $(this).closest('tr').data('id');
-        if (fileId) {
-            SmartTaggerSidebar.loadPendingSuggestion(fileId);
-        }
-    });
-
-    // -------------------------------------------------------------------------
-    // Category manager page — loaded at /apps/smartfiletagger/categories
-    // Lets users create custom categories with example files
-    // -------------------------------------------------------------------------
-
-    const CategoryManager = {
-
-        init: function () {
-            if (!$('#sft-category-manager').length) return;
-            CategoryManager.loadCategories();
-            $('#sft-create-category-form').on('submit', CategoryManager.handleCreate);
-        },
-
-        loadCategories: function () {
-            $.get(OC.generateUrl('/apps/smartfiletagger/categories'), function (data) {
-                const list = $('#sft-category-list');
-                list.empty();
-                if (!data.categories || data.categories.length === 0) {
-                    list.append('<p class="sft-empty">No categories yet. Create one below.</p>');
-                    return;
-                }
-                data.categories.forEach(function (cat) {
-                    list.append(`
-                        <div class="sft-category-item">
-                            <span class="sft-tag-pill">${escapeHtml(cat.name)}</span>
-                            <span class="sft-example-count">${cat.example_count} examples</span>
-                            <button class="sft-btn-delete" data-name="${escapeHtml(cat.name)}">Remove</button>
-                        </div>
-                    `);
-                });
-                list.find('.sft-btn-delete').on('click', CategoryManager.handleDelete);
-            });
-        },
-
-        handleCreate: function (e) {
-            e.preventDefault();
-            const name    = $('#sft-category-name').val().trim();
-            const fileIds = CategoryManager.getSelectedFileIds();
-
-            if (!name) {
-                OC.Notification.showTemporary(t('smartfiletagger', 'Please enter a category name.'));
-                return;
-            }
-            if (fileIds.length < 3) {
-                OC.Notification.showTemporary(t('smartfiletagger', 'Please select at least 3 example files.'));
-                return;
-            }
-
-            $.post(
-                OC.generateUrl('/apps/smartfiletagger/categories/register'),
-                { categoryName: name, exampleFileIds: fileIds }
-            )
-            .done(function () {
-                OC.Notification.showTemporary(t('smartfiletagger', 'Category created successfully.'));
-                $('#sft-category-name').val('');
-                CategoryManager.clearSelectedFiles();
-                CategoryManager.loadCategories();
-            })
-            .fail(function () {
-                OC.Notification.showTemporary(t('smartfiletagger', 'Failed to create category. Please try again.'));
-            });
-        },
-
-        handleDelete: function () {
-            const name = $(this).data('name');
-            OC.dialogs.confirm(
-                t('smartfiletagger', 'Delete category "{name}"? This cannot be undone.'.replace('{name}', name)),
-                t('smartfiletagger', 'Delete category'),
-                function (confirmed) {
-                    if (!confirmed) return;
-                    $.ajax({
-                        url: OC.generateUrl('/apps/smartfiletagger/categories/' + encodeURIComponent(name)),
-                        type: 'DELETE',
-                    }).done(function () {
-                        CategoryManager.loadCategories();
-                    });
-                }
-            );
-        },
-
-        getSelectedFileIds: function () {
-            return $('.sft-example-file:checked').map(function () {
-                return $(this).val();
-            }).get();
-        },
-
-        clearSelectedFiles: function () {
-            $('.sft-example-file').prop('checked', false);
-        },
-    };
-
-    // -------------------------------------------------------------------------
-    // Utility
-    // -------------------------------------------------------------------------
+    // ── Suggestion banner ────────────────────────────────────────────────────
+    // Polls for pending suggestions and injects banner into sidebar
 
     function escapeHtml(str) {
         return String(str)
@@ -229,9 +16,225 @@
             .replace(/"/g, '&quot;');
     }
 
-    // Init on DOM ready
-    $(document).ready(function () {
-        CategoryManager.init();
+    function loadSuggestion(fileId) {
+        if (!fileId) return;
+        fetch(OC.generateUrl('/apps/smartfiletagger/suggestion/' + fileId), {
+            headers: { 'requesttoken': OC.requestToken }
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data && data.tag) {
+                renderBanner(fileId, data);
+            }
+        })
+        .catch(() => {});
+    }
+
+    function renderBanner(fileId, data) {
+        // Remove existing banner
+        const existing = document.getElementById('sft-banner-' + fileId);
+        if (existing) existing.remove();
+
+        const confidence = Math.round(data.confidence * 100);
+        const banner = document.createElement('div');
+        banner.id = 'sft-banner-' + fileId;
+        banner.className = 'sft-suggestion-banner';
+        banner.innerHTML = `
+            <div class="sft-banner-header">
+                <span class="sft-icon">🏷️</span>
+                <strong>Suggested tag:</strong>
+                <span class="sft-tag-pill">${escapeHtml(data.tag)}</span>
+                <span class="sft-confidence">${confidence}% confidence</span>
+            </div>
+            <div class="sft-actions">
+                <button class="sft-btn sft-btn-confirm" id="sft-confirm-${fileId}">Apply tag</button>
+                <button class="sft-btn sft-btn-reject" id="sft-reject-${fileId}">Not this tag</button>
+            </div>
+        `;
+
+        // Inject into sidebar — try multiple selectors for NC 27 compatibility
+        const targets = [
+            '#app-sidebar-vue .app-sidebar-header',
+            '#app-sidebar .app-sidebar-header',
+            '.app-sidebar-header',
+            '#app-sidebar',
+        ];
+        let injected = false;
+        for (const sel of targets) {
+            const el = document.querySelector(sel);
+            if (el) {
+                el.parentNode.insertBefore(banner, el.nextSibling);
+                injected = true;
+                break;
+            }
+        }
+        if (!injected) {
+            // Last resort: fixed position overlay
+            banner.style.cssText = 'position:fixed;top:70px;right:20px;z-index:9999;background:#fff;border:1px solid #ccc;padding:12px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.15);max-width:300px;';
+            document.body.appendChild(banner);
+        }
+
+        document.getElementById('sft-confirm-' + fileId).addEventListener('click', () => handleConfirm(fileId, data.tag));
+        document.getElementById('sft-reject-' + fileId).addEventListener('click', () => handleReject(fileId, data.tag));
+    }
+
+    function handleConfirm(fileId, tag) {
+        fetch(OC.generateUrl('/apps/smartfiletagger/confirm'), {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'requesttoken': OC.requestToken
+            },
+            body: 'fileId=' + encodeURIComponent(fileId) + '&tag=' + encodeURIComponent(tag)
+        })
+        .then(r => r.json())
+        .then(() => {
+            const banner = document.getElementById('sft-banner-' + fileId);
+            if (banner) {
+                banner.innerHTML = '<div class="sft-confirmed">✅ Tag applied: <strong>' + escapeHtml(tag) + '</strong></div>';
+            }
+        })
+        .catch(() => {});
+    }
+
+    function handleReject(fileId, tag) {
+        fetch(OC.generateUrl('/apps/smartfiletagger/reject'), {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'requesttoken': OC.requestToken
+            },
+            body: 'fileId=' + encodeURIComponent(fileId) + '&tag=' + encodeURIComponent(tag)
+        })
+        .then(() => {
+            const banner = document.getElementById('sft-banner-' + fileId);
+            if (banner) banner.remove();
+            // Show Nextcloud notification
+            if (window.OC && OC.Notification) {
+                OC.Notification.showTemporary('Feedback saved.');
+            }
+        })
+        .catch(() => {});
+    }
+
+    // ── Hook into sidebar open ───────────────────────────────────────────────
+    // Nextcloud 27 uses a Vue-based sidebar — watch for DOM changes
+
+    function watchSidebar() {
+        const observer = new MutationObserver(function(mutations) {
+            for (const mutation of mutations) {
+                for (const node of mutation.addedNodes) {
+                    if (node.nodeType !== 1) continue;
+                    // Look for the file ID in the sidebar
+                    const sidebar = document.querySelector('#app-sidebar-vue, #app-sidebar');
+                    if (sidebar) {
+                        // Try to get file ID from URL hash or data attribute
+                        const fileId = getFileIdFromSidebar(sidebar);
+                        if (fileId) {
+                            loadSuggestion(fileId);
+                        }
+                    }
+                }
+            }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+    }
+
+    function getFileIdFromSidebar(sidebar) {
+        // Try data attribute
+        const el = sidebar.querySelector('[data-file-id], [data-id]');
+        if (el) return el.dataset.fileId || el.dataset.id;
+        // Try URL hash
+        const match = window.location.search.match(/fileid=(\d+)/);
+        if (match) return match[1];
+        return null;
+    }
+
+    // ── Category manager ─────────────────────────────────────────────────────
+    // Runs on the /apps/smartfiletagger/categories page
+
+    function initCategoryManager() {
+        const form = document.getElementById('sft-create-category-form');
+        if (!form) return;
+
+        loadCategoryList();
+
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+            const name = document.getElementById('sft-category-name').value.trim();
+            const idsInput = document.getElementById('sft-example-ids').value.trim();
+            const fileIds = idsInput.split(',').map(s => s.trim()).filter(s => s !== '');
+
+            if (!name) { alert('Please enter a category name.'); return; }
+            if (fileIds.length < 3) { alert('Please select at least 3 example files.'); return; }
+
+            const params = new URLSearchParams();
+            params.append('categoryName', name);
+            fileIds.forEach(id => params.append('exampleFileIds[]', id));
+
+            fetch(OC.generateUrl('/apps/smartfiletagger/categories/register'), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'requesttoken': OC.requestToken
+                },
+                body: params.toString()
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    document.getElementById('sft-category-name').value = '';
+                    loadCategoryList();
+                } else {
+                    alert('Failed: ' + (data.message || data.error));
+                }
+            });
+        });
+    }
+
+    function loadCategoryList() {
+        const list = document.getElementById('sft-category-list');
+        if (!list) return;
+
+        fetch(OC.generateUrl('/apps/smartfiletagger/categories'), {
+            headers: { 'requesttoken': OC.requestToken }
+        })
+        .then(r => r.json())
+        .then(data => {
+            list.innerHTML = '';
+            if (!data.categories || data.categories.length === 0) {
+                list.innerHTML = '<p class="sft-empty">No custom categories yet.</p>';
+                return;
+            }
+            data.categories.forEach(cat => {
+                const item = document.createElement('div');
+                item.className = 'sft-category-item';
+                item.innerHTML = `
+                    <span class="sft-tag-pill">${escapeHtml(cat.category_name)}</span>
+                    <span class="sft-example-count">${cat.example_count} examples</span>
+                    <button class="sft-btn-delete" data-name="${escapeHtml(cat.category_name)}">Remove</button>
+                `;
+                item.querySelector('.sft-btn-delete').addEventListener('click', function() {
+                    deleteCategory(this.dataset.name);
+                });
+                list.appendChild(item);
+            });
+        });
+    }
+
+    function deleteCategory(name) {
+        if (!confirm('Delete category "' + name + '"?')) return;
+        fetch(OC.generateUrl('/apps/smartfiletagger/categories/' + encodeURIComponent(name)), {
+            method: 'DELETE',
+            headers: { 'requesttoken': OC.requestToken }
+        })
+        .then(() => loadCategoryList());
+    }
+
+    // ── Init ─────────────────────────────────────────────────────────────────
+    document.addEventListener('DOMContentLoaded', function() {
+        watchSidebar();
+        initCategoryManager();
     });
 
-})(OCA, OC, jQuery);
+})();

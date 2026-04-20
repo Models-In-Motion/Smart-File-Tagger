@@ -3,6 +3,7 @@ namespace OCA\SmartFileTagger\Controller;
 
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\JSONResponse;
+use OCP\AppFramework\Http\TemplateResponse;
 use OCP\IRequest;
 use OCP\IUserSession;
 
@@ -24,8 +25,10 @@ class CategoryController extends Controller {
      * @NoAdminRequired
      * @NoCSRFRequired
      */
-    public function index(): JSONResponse {
-        return $this->list();
+    public function index(): \OCP\AppFramework\Http\TemplateResponse {
+        return new \OCP\AppFramework\Http\TemplateResponse('smartfiletagger', 'category-manager', [
+            'user_id' => $this->getUserId(),
+        ]);
     }
 
     /**

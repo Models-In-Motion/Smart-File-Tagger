@@ -1,9 +1,9 @@
 data:
   # Docker path — used when running via docker-compose on Chameleon
-  path: /app/data_artifacts/versions/v6/train.parquet
-  eval_path: /app/data_artifacts/versions/v6/eval.parquet
+  path: /app/data_artifacts/versions/v9_1/train_llm.parquet
+  eval_path: /app/data_artifacts/versions/v9_1/eval_llm.parquet
   text_col: extracted_text
-  label_col: label
+  label_col: llm_label
   allowed_labels:
     - Lecture Notes
     - Other
@@ -35,6 +35,7 @@ models:
     max_iter: 1000
     c: 1.0
     solver: lbfgs
+    class_weight: balanced
 
   lightgbm:
     n_estimators: 300
