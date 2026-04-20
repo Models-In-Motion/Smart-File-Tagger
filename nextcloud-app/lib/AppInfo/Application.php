@@ -7,8 +7,6 @@ use OCP\AppFramework\App;
 use OCP\AppFramework\Bootstrap\IBootContext;
 use OCP\AppFramework\Bootstrap\IBootstrap;
 use OCP\AppFramework\Bootstrap\IRegistrationContext;
-use OCP\EventDispatcher\IEventDispatcher;
-use OCP\Files\Events\Node\NodeCreatedEvent;
 use OCP\Util;
 
 class Application extends App implements IBootstrap {
@@ -18,9 +16,12 @@ class Application extends App implements IBootstrap {
         parent::__construct(self::APP_ID);
     }
 
-    public function register(IRegistrationContext $context): void {}
+    public function register(IRegistrationContext $context): void {
+        // Register script and style here so nonce is injected correctly
+    }
 
     public function boot(IBootContext $context): void {
+        // addScript in boot() ensures nonce is available
         Util::addScript(self::APP_ID, 'smart-tagger');
         Util::addStyle(self::APP_ID, 'smart-tagger');
     }

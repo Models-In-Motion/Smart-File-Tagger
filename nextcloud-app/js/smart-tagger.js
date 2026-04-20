@@ -121,20 +121,41 @@
     // Nextcloud 27 uses a Vue-based sidebar — watch for DOM changes
 
     function watchSidebar() {
-        const observer = new MutationObserver(function(mutations) {
-            for (const mutation of mutations) {
-                for (const node of mutation.addedNodes) {
-                    if (node.nodeType !== 1) continue;
-                    // Look for the file ID in the sidebar
-                    const sidebar = document.querySelector('#app-sidebar-vue, #app-sidebar');
-                    if (sidebar) {
-                        // Try to get file ID from URL hash or data attribute
-                        const fileId = getFileIdFromSidebar(sidebar);
-                        if (fileId) {
-                            loadSuggestion(fileId);
-                        }
-                    }
-                }
+        function checkUrl() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const fileId = urlParams.get('openfile') || urlParams.get('fileid');
+            if (fileId && fileId !== window._sftLastFileId) {
+                window._sftLastFileId = fileId;
+                // Small delay to let sidebar DOM render
+                setTimeout(function() {
+                    loadSuggestion(fileId);
+                }, 800);
+            }
+        }
+
+        // Check on load
+        checkUrl();
+
+        // Watch URL changes (Nextcloud uses pushState)
+        const originalPushState = history.pushState;
+        history.pushState = function() {
+            originalPushState.apply(history, arguments);
+            setTimeout(checkUrl, 100);
+        };
+
+        const originalReplaceState = history.replaceState;
+        history.replaceState = function() {
+            originalReplaceState.apply(history, arguments);
+            setTimeout(checkUrl, 100);
+        };
+
+        window.addEventListener('popstate', checkUrl);
+
+        // Also watch DOM for sidebar appearing
+        const observer = new MutationObserver(function() {
+            const sidebar = document.querySelector('#app-sidebar-vue');
+            if (sidebar && sidebar.children.length > 0) {
+                checkUrl();
             }
         });
         observer.observe(document.body, { childList: true, subtree: true });
@@ -144,9 +165,10 @@
         // Try data attribute
         const el = sidebar.querySelector('[data-file-id], [data-id]');
         if (el) return el.dataset.fileId || el.dataset.id;
-        // Try URL hash
-        const match = window.location.search.match(/fileid=(\d+)/);
-        if (match) return match[1];
+        // Try URL params
+        const urlParams = new URLSearchParams(window.location.search);
+        const fileId = urlParams.get('openfile') || urlParams.get('fileid');
+        if (fileId) return fileId;
         return null;
     }
 
@@ -232,9 +254,26 @@
     }
 
     // ── Init ─────────────────────────────────────────────────────────────────
-    document.addEventListener('DOMContentLoaded', function() {
+    // Use multiple strategies to ensure we init after Nextcloud's Vue app loads
+
+    function init() {
         watchSidebar();
         initCategoryManager();
-    });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function() {
+            // Wait extra time for Nextcloud Vue app to mount
+            setTimeout(init, 1000);
+        });
+    } else {
+        // Already loaded
+        setTimeout(init, 500);
+    }
+
+    // Also expose globally so we can call manually from console for debugging
+    window.sftInit = init;
+    window.sftLoadSuggestion = loadSuggestion;
+    window.sftRenderBanner = renderBanner;
 
 })();

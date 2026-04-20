@@ -3,23 +3,14 @@
       xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
     <id>smartfiletagger</id>
     <name>Smart File Tagger</name>
-    <summary>Automatic ML-based document tagging with per-user categories</summary>
-    <description>
-        Smart File Tagger automatically reads uploaded documents and suggests
-        or applies categorical tags using a per-user few-shot ML model.
-        Users can define their own categories with a few examples, accept or
-        reject suggestions, and the model retrains weekly on their corrections.
-    </description>
+    <description>Automatically tags uploaded files using ML</description>
     <version>1.0.0</version>
-    <licence>MIT</licence>
-    <author>smart-file-tagger team</author>
+    <licence>agpl</licence>
+    <author>Krish Jani</author>
     <namespace>SmartFileTagger</namespace>
     <category>files</category>
     <dependencies>
         <nextcloud min-version="27" max-version="30"/>
     </dependencies>
-    <settings>
-        <personal>OCA\SmartFileTagger\Settings\PersonalSettings</personal>
-    </settings>
     <bootstrap>OCA\SmartFileTagger\AppInfo\Application</bootstrap>
 </info>
