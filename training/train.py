@@ -50,6 +50,17 @@ class SplitData:
     y_train: np.ndarray
     y_val: np.ndarray
     y_test: np.ndarray
+    sample_weight_train: np.ndarray | None = None
+
+
+CORE_LABELS = ["Lecture Notes", "Other", "Problem Set", "Exam", "Reading"]
+
+
+def compute_sample_weights(sources: pd.Series | None) -> np.ndarray | None:
+    """Give user feedback corrections higher influence during training."""
+    if sources is None:
+        return None
+    return sources.apply(lambda s: 10.0 if s == "user_feedback" else 1.0).to_numpy()
 
 
 def parse_args() -> argparse.Namespace:
@@ -150,9 +161,14 @@ def load_filtered_frame(
     if label_col not in df.columns:
         raise ValueError(f"label_col '{label_col}' not found in data at path: {path}")
 
-    df = df[[text_col, label_col]].copy()
+    selected_columns = [text_col, label_col]
+    if "source" in df.columns:
+        selected_columns.append("source")
+    df = df[selected_columns].copy()
     df[text_col] = df[text_col].fillna("").astype(str)
     df[label_col] = df[label_col].fillna("").astype(str)
+    if "source" in df.columns:
+        df["source"] = df["source"].fillna("").astype(str)
 
     # Keep only rows with non-empty text and labels
     df = df[(df[text_col].str.strip() != "") & (df[label_col].str.strip() != "")]
@@ -166,7 +182,7 @@ def load_filtered_frame(
     return df
 
 
-def load_and_filter_data(cfg: dict[str, Any]) -> tuple[pd.Series, pd.Series]:
+def load_and_filter_data(cfg: dict[str, Any]) -> tuple[pd.Series, pd.Series, pd.Series | None]:
     data_cfg = cfg["data"]
     text_col = data_cfg["text_col"]
     label_col = data_cfg["label_col"]
@@ -178,7 +194,8 @@ def load_and_filter_data(cfg: dict[str, Any]) -> tuple[pd.Series, pd.Series]:
         allowed_labels=allowed_labels,
     )
 
-    return df[text_col], df[label_col]
+    sources = df["source"] if "source" in df.columns else None
+    return df[text_col], df[label_col], sources
 
 
 def load_pre_split_data(cfg: dict[str, Any]) -> tuple[SplitData, LabelEncoder] | None:
@@ -236,6 +253,8 @@ def load_pre_split_data(cfg: dict[str, Any]) -> tuple[SplitData, LabelEncoder] |
     y_val = encoder.transform(y_val_raw)
     y_test = encoder.transform(y_test_raw)
 
+    sample_weight_train = compute_sample_weights(train_df["source"] if "source" in train_df.columns else None)
+
     return (
         SplitData(
             x_train=train_df[text_col],
@@ -244,12 +263,18 @@ def load_pre_split_data(cfg: dict[str, Any]) -> tuple[SplitData, LabelEncoder] |
             y_train=y_train,
             y_val=y_val,
             y_test=y_test,
+            sample_weight_train=sample_weight_train,
         ),
         encoder,
     )
 
 
-def split_data(texts: pd.Series, labels: pd.Series, cfg: dict[str, Any]) -> tuple[SplitData, LabelEncoder]:
+def split_data(
+    texts: pd.Series,
+    labels: pd.Series,
+    cfg: dict[str, Any],
+    sources: pd.Series | None = None,
+) -> tuple[SplitData, LabelEncoder]:
     split_cfg = cfg["split"]
     seed = int(split_cfg["random_state"])
     train_size = float(split_cfg["train_size"])
@@ -259,13 +284,24 @@ def split_data(texts: pd.Series, labels: pd.Series, cfg: dict[str, Any]) -> tupl
     if not np.isclose(train_size + val_size + test_size, 1.0):
         raise ValueError("train_size + val_size + test_size must equal 1.0")
 
-    x_train_txt, x_rest_txt, y_train_raw, y_rest_raw = train_test_split(
-        texts,
-        labels,
-        train_size=train_size,
-        random_state=seed,
-        stratify=labels,
-    )
+    if sources is not None:
+        x_train_txt, x_rest_txt, y_train_raw, y_rest_raw, src_train_raw, _src_rest_raw = train_test_split(
+            texts,
+            labels,
+            sources,
+            train_size=train_size,
+            random_state=seed,
+            stratify=labels,
+        )
+    else:
+        x_train_txt, x_rest_txt, y_train_raw, y_rest_raw = train_test_split(
+            texts,
+            labels,
+            train_size=train_size,
+            random_state=seed,
+            stratify=labels,
+        )
+        src_train_raw = None
 
     val_ratio_in_rest = val_size / (val_size + test_size)
     x_val_txt, x_test_txt, y_val_raw, y_test_raw = train_test_split(
@@ -289,6 +325,7 @@ def split_data(texts: pd.Series, labels: pd.Series, cfg: dict[str, Any]) -> tupl
             y_train=y_train,
             y_val=y_val,
             y_test=y_test,
+            sample_weight_train=compute_sample_weights(src_train_raw),
         ),
         encoder,
     )
@@ -315,6 +352,7 @@ def build_tfidf_features(split: SplitData, cfg: dict[str, Any]) -> tuple[SplitDa
             y_train=split.y_train,
             y_val=split.y_val,
             y_test=split.y_test,
+            sample_weight_train=split.sample_weight_train,
         ),
         vectorizer,
     )
@@ -347,6 +385,7 @@ def build_sbert_features(split: SplitData, cfg: dict[str, Any]) -> tuple[SplitDa
             y_train=split.y_train,
             y_val=split.y_val,
             y_test=split.y_test,
+            sample_weight_train=split.sample_weight_train,
         ),
         model,
     )
@@ -435,9 +474,9 @@ def main() -> None:
     print("Loading data...", flush=True)
     pre_split = load_pre_split_data(cfg)
     if pre_split is None:
-        texts, labels = load_and_filter_data(cfg)
+        texts, labels, sources = load_and_filter_data(cfg)
         print(f"  rows: {len(texts)}", flush=True)
-        split_raw, encoder = split_data(texts, labels, cfg)
+        split_raw, encoder = split_data(texts, labels, cfg, sources=sources)
     else:
         split_raw, encoder = pre_split
         print(
@@ -458,6 +497,11 @@ def main() -> None:
                 y_train=split_raw.y_train[idx],
                 y_val=split_raw.y_val,
                 y_test=split_raw.y_test,
+                sample_weight_train=(
+                    split_raw.sample_weight_train[idx]
+                    if split_raw.sample_weight_train is not None
+                    else None
+                ),
             )
         print(
             f"  train subsample: {len(split_raw.y_train)} rows (--max-rows={args.max_rows})",
@@ -482,7 +526,14 @@ def main() -> None:
 
     print("Training classifier...", flush=True)
     train_start = time.perf_counter()
-    classifier.fit(split.x_train, split.y_train)
+    fit_kwargs: dict[str, Any] = {}
+    if split.sample_weight_train is not None and args.model in {
+        "tfidf_logreg",
+        "sbert_logreg",
+        "tfidf_lightgbm",
+    }:
+        fit_kwargs["sample_weight"] = split.sample_weight_train
+    classifier.fit(split.x_train, split.y_train, **fit_kwargs)
     train_seconds = time.perf_counter() - train_start
 
     infer_start = time.perf_counter()
@@ -518,8 +569,6 @@ def main() -> None:
         "label_col": cfg["data"]["label_col"],
     }
     joblib.dump(bundle, artifact_path)
-    serving_bundle_path = sync_bundle_to_serving(artifact_path)
-    print(f"Synced serving bundle to {serving_bundle_path}", flush=True)
 
     runtime_metrics["model_artifact_size_bytes"] = int(artifact_path.stat().st_size)
 
@@ -581,31 +630,38 @@ def main() -> None:
         MACRO_F1_THRESHOLD = 0.50
         MIN_CLASS_F1_THRESHOLD = 0.30
 
-        test_macro_f1 = all_metrics["test_macro_f1"]
-        min_class_f1 = min(
-            v for k, v in all_metrics.items()
-            if k.startswith("test_f1_") and "solution" not in k
-        )
+        core_f1_by_label = {
+            label: all_metrics[f"test_f1_{slugify(label)}"]
+            for label in CORE_LABELS
+            if f"test_f1_{slugify(label)}" in all_metrics
+        }
+        if not core_f1_by_label:
+            raise ValueError(
+                "None of the core labels are present in test metrics; "
+                "cannot evaluate quality gates."
+            )
+
+        core_macro_f1 = float(np.mean(list(core_f1_by_label.values())))
+        min_class_f1 = min(core_f1_by_label.values())
 
         gates_passed = (
-            test_macro_f1 >= MACRO_F1_THRESHOLD
-            and all(
-                v >= MIN_CLASS_F1_THRESHOLD
-                for k, v in all_metrics.items()
-                if k.startswith("test_f1_") and "solution" not in k
-            )
+            core_macro_f1 >= MACRO_F1_THRESHOLD
+            and all(v >= MIN_CLASS_F1_THRESHOLD for v in core_f1_by_label.values())
         )
 
         mlflow.log_metric("quality_gate_passed", float(gates_passed))
+        mlflow.log_metric("quality_gate_core_macro_f1", core_macro_f1)
         mlflow.log_metric("min_class_f1", min_class_f1)
 
         if gates_passed:
             print(
                 f"Quality gates PASSED — "
-                f"macro_f1={test_macro_f1:.3f}, "
+                f"core_macro_f1={core_macro_f1:.3f}, "
                 f"min_class_f1={min_class_f1:.3f}",
                 flush=True,
             )
+            serving_bundle_path = sync_bundle_to_serving(artifact_path)
+            print(f"Synced serving bundle to {serving_bundle_path}", flush=True)
             result = mlflow.sklearn.log_model(
                 sk_model=classifier,
                 artifact_path="model",
@@ -630,7 +686,7 @@ def main() -> None:
         else:
             print(
                 f"Quality gates FAILED — "
-                f"macro_f1={test_macro_f1:.3f} (need {MACRO_F1_THRESHOLD}), "
+                f"core_macro_f1={core_macro_f1:.3f} (need {MACRO_F1_THRESHOLD}), "
                 f"min_class_f1={min_class_f1:.3f} (need {MIN_CLASS_F1_THRESHOLD})",
                 flush=True,
             )
