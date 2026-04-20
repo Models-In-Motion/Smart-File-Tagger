@@ -184,7 +184,7 @@ services:
       - --output-dir
       - /app/artifacts/versions
       - --version
-      - v2
+      - v14
 
   drift-monitor:
     build:
@@ -199,11 +199,11 @@ services:
         condition: service_healthy
     command:
       - --baseline
-      - /app/artifacts/versions/v2/train.parquet
+      - /app/artifacts/versions/v14_taxonomy_4class/train.parquet
       - --output
       - /app/artifacts/drift_report.json
       - --version
-      - v2
+      - v14
       - --interval
       - "3600"
 
