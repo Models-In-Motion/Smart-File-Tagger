@@ -130,13 +130,21 @@ class TagController extends Controller {
 
             if ($action === 'auto_apply' && $predictedTag !== '') {
                 $this->applyTag((string)$fileId, $predictedTag);
+                // Keep a short-lived UI hint so users can see what was auto-applied.
+                $this->storePendingSuggestion($userId, (string)$fileId, [
+                    'file_id'        => (string)$fileId,
+                    'file_path'      => $filePath,
+                    'predicted_tag'  => $predictedTag,
+                    'confidence'     => $confidence,
+                    'action'         => $action,
+                    'model_response' => $prediction,
+                    'created_at'     => gmdate('c'),
+                ]);
                 error_log("SmartFileTagger auto-applied tag '{$predictedTag}' to file {$fileId}");
             } elseif ($action === 'suggest' && $predictedTag !== '') {
-                // Apply tag with "?" prefix to indicate it's a suggestion, not confirmed
-                // This makes it visible in the Nextcloud Files UI immediately
-                $suggestedTagName = '? ' . $predictedTag;
+                // Keep suggestion visible in Files as a dedicated suggested tag.
+                $suggestedTagName = 'Suggested: ' . $predictedTag;
                 $this->applyTag((string)$fileId, $suggestedTagName);
-                // Also store for JS banner (when sidebar detection works)
                 $this->storePendingSuggestion($userId, (string)$fileId, [
                     'file_id'        => (string)$fileId,
                     'file_path'      => $filePath,
@@ -146,7 +154,7 @@ class TagController extends Controller {
                     'model_response' => $prediction,
                     'created_at' => gmdate('c'),
                 ]);
-                error_log("SmartFileTagger suggested tag '? {$predictedTag}' for file {$fileId}");
+                error_log("SmartFileTagger suggested tag '{$predictedTag}' for file {$fileId}");
             } else {
                 error_log("SmartFileTagger no_tag for file {$fileId}");
             }
@@ -186,9 +194,11 @@ class TagController extends Controller {
             return new JSONResponse(['success' => false, 'error' => 'Missing fileId/tag/user'], 400);
         }
 
-        // Apply the confirmed tag (remove "? " prefix if present)
-        $cleanTag = ltrim($tag, '? ');
+        // Apply the confirmed tag.
+        $cleanTag = trim($tag);
+        $this->removeTag($fileId, 'Suggested: ' . $cleanTag);
         $this->applyTag($fileId, $cleanTag);
+        $this->clearPendingSuggestion($userId, $fileId);
 
         // Send feedback to FastAPI in correct format
         $this->callSidecarJson('/feedback', [
@@ -230,11 +240,17 @@ class TagController extends Controller {
             return new JSONResponse(['tag' => null], 200);
         }
 
+        // Auto-apply banners are informational only; show once then clear.
+        if (($suggestion['action'] ?? '') === 'auto_apply') {
+            $this->clearPendingSuggestion($userId, $fileId);
+        }
+
         return new JSONResponse([
             'tag' => $suggestion['predicted_tag'],
             'confidence' => $suggestion['confidence'],
             'explanation' => null,
             'file_id' => $fileId,
+            'action' => $suggestion['action'] ?? 'suggest',
         ]);
     }
 
@@ -253,7 +269,9 @@ class TagController extends Controller {
             return new JSONResponse(['success' => false, 'error' => 'Missing fileId/tag/user'], 400);
         }
 
-        $cleanTag = ltrim($tag, '? ');
+        $cleanTag = trim($tag);
+        $this->removeTag($fileId, 'Suggested: ' . $cleanTag);
+        $this->clearPendingSuggestion($userId, $fileId);
 
         // Send feedback to FastAPI in correct format
         $feedbackType = $correctTag !== '' ? 'corrected' : 'rejected';
@@ -410,6 +428,25 @@ class TagController extends Controller {
         }
     }
 
+    private function removeTag(string $fileId, string $tagName): void {
+        try {
+            $tag = $this->tagManager->getTag($tagName, true, true);
+
+            if (method_exists($this->tagManager, 'unassignTags')) {
+                $this->tagManager->unassignTags((string)$fileId, 'files', [$tag->getId()]);
+            } elseif (method_exists($this->tagMapper, 'unassignTags')) {
+                $this->tagMapper->unassignTags((string)$fileId, 'files', [$tag->getId()]);
+            }
+        } catch (\OCP\SystemTag\TagNotFoundException $e) {
+            // Suggested tag may not exist yet — safe to ignore.
+        } catch (\Throwable $e) {
+            \OC::$server->getLogger()->error(
+                'SmartFileTagger: failed to remove tag ' . $tagName . ' from file ' . $fileId,
+                ['app' => 'smartfiletagger', 'exception' => $e]
+            );
+        }
+    }
+
     private function storePendingSuggestion(string $userId, string $fileId, array $suggestion): void {
         $data = [];
         if (is_file($this->suggestionStorePath)) {
@@ -426,6 +463,26 @@ class TagController extends Controller {
         $data[$userId][$fileId] = $suggestion;
 
         @file_put_contents($this->suggestionStorePath, json_encode($data, JSON_PRETTY_PRINT), LOCK_EX);
+    }
+
+    private function clearPendingSuggestion(string $userId, string $fileId): void {
+        if (!is_file($this->suggestionStorePath)) {
+            return;
+        }
+
+        $raw = @file_get_contents($this->suggestionStorePath);
+        $data = json_decode((string)$raw, true);
+        if (!is_array($data)) {
+            return;
+        }
+
+        if (isset($data[$userId]) && is_array($data[$userId]) && isset($data[$userId][$fileId])) {
+            unset($data[$userId][$fileId]);
+            if (count($data[$userId]) === 0) {
+                unset($data[$userId]);
+            }
+            @file_put_contents($this->suggestionStorePath, json_encode($data, JSON_PRETTY_PRINT), LOCK_EX);
+        }
     }
 
     private function pushSuggestionNotification(

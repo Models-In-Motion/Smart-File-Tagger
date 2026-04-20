@@ -12,10 +12,21 @@
 
    .sft-suggestion-banner {
     margin: 12px 0 16px;
-    padding: 14px 16px;
+    padding: 10px 12px;
     border-radius: var(--border-radius-large, 8px);
     border: 1px solid var(--color-border);
     background: var(--color-background-hover);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.sft-banner-suggested {
+    border-color: #c7e0ff;
+    background: #f3f8ff;
+}
+
+.sft-banner-applied {
+    border-color: #c7efcf;
+    background: #f1fbf3;
 }
 
 .sft-banner-header {
@@ -23,8 +34,8 @@
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
-    margin-bottom: 8px;
-    font-size: 14px;
+    margin-bottom: 6px;
+    font-size: 12px;
 }
 
 .sft-icon {
@@ -32,19 +43,38 @@
     flex-shrink: 0;
 }
 
+.sft-banner-prefix {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-text-maxcontrast);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
 .sft-tag-pill {
     display: inline-block;
-    padding: 2px 10px;
+    padding: 2px 8px;
     border-radius: 12px;
-    background: var(--color-primary-element-light);
-    color: var(--color-primary-element-light-text);
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 500;
+    border: 1px solid transparent;
+}
+
+.sft-tag-pill-suggested {
+    background: #e8f2ff;
+    border-color: #bdd9ff;
+    color: #1f4f8a;
+}
+
+.sft-tag-pill-applied {
+    background: #e7f7ea;
+    border-color: #b9e7c1;
+    color: #24673a;
 }
 
 .sft-confidence {
     color: var(--color-text-maxcontrast);
-    font-size: 12px;
+    font-size: 11px;
     margin-left: auto;
 }
 
@@ -60,14 +90,14 @@
 .sft-actions {
     display: flex;
     gap: 8px;
-    margin-top: 10px;
+    margin-top: 6px;
 }
 
 .sft-btn {
-    padding: 6px 16px;
+    padding: 4px 10px;
     border-radius: var(--border-radius, 4px);
     border: 1px solid var(--color-border);
-    font-size: 13px;
+    font-size: 11px;
     cursor: pointer;
     background: var(--color-main-background);
     color: var(--color-main-text);

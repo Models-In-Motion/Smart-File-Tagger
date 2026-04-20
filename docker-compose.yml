@@ -41,9 +41,14 @@ services:
     environment:
       DB_URL: postgresql://tagger:tagger@postgres:5432/tagger
       MLFLOW_TRACKING_URI: http://mlflow:5000
-      USE_ONNX: "true"
+      USE_ONNX: "false"
       USE_STUB_MODEL: "false"
+      BUNDLE_PATH: /models/model_bundle.joblib
       PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus_multiproc
+    volumes:
+      # Shared model store — training writes here, serving reads from here
+      # This allows hot-reload via /admin/load-model without rebuilding the image
+      - ./serving/models:/models
     depends_on:
       postgres:
         condition: service_healthy
@@ -89,9 +94,8 @@ services:
       SERVING_MODEL_BUNDLE_PATH: /app/serving_models/model_bundle.joblib
     volumes:
       - ./training/artifacts:/app/artifacts
-      # Mount Viral's data so training can read train/eval parquet files
       - ./data/artifacts:/app/data_artifacts:ro
-      # Ensure training always updates the serving bundle on the host.
+      # Same host directory as serving's /models mount
       - ./serving/models:/app/serving_models
     depends_on:
       postgres:
@@ -127,6 +131,25 @@ services:
         echo '[retrain-cron] Sleeping 1h.';
         sleep 3600;
       done"
+
+  monitor:
+    build:
+      context: ./serving
+      dockerfile: Dockerfile
+    environment:
+      DB_URL: postgresql://tagger:tagger@postgres:5432/tagger
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      SERVING_URL: http://serving:8000
+      PROMETHEUS_URL: http://prometheus:9090
+      CHECK_INTERVAL_SECONDS: "300"
+      ERROR_RATE_THRESHOLD: "0.05"
+      CORRECTION_RATE_THRESHOLD: "0.40"
+    depends_on:
+      - serving
+      - prometheus
+      - postgres
+      - mlflow
+    entrypoint: ["python", "monitor.py"]
 
   qdrant:
     image: qdrant/qdrant:latest
@@ -268,25 +291,6 @@ services:
       - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
     depends_on:
       - prometheus
-  
-  monitor:
-    build:
-      context: ./serving
-      dockerfile: Dockerfile
-    environment:
-      DB_URL: postgresql://tagger:tagger@postgres:5432/tagger
-      MLFLOW_TRACKING_URI: http://mlflow:5000
-      SERVING_URL: http://serving:8000
-      PROMETHEUS_URL: http://prometheus:9090
-      CHECK_INTERVAL_SECONDS: "300"
-      ERROR_RATE_THRESHOLD: "0.05"
-      CORRECTION_RATE_THRESHOLD: "0.40"
-    depends_on:
-      - serving
-      - prometheus
-      - postgres
-      - mlflow
-    entrypoint: ["python", "monitor.py"]
 
 volumes:
   postgres_data:
