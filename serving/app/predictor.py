@@ -56,10 +56,10 @@ ONNX_MODEL_PATH    = Path(os.getenv("ONNX_MODEL_PATH",    "/models/sbert_onnx.on
 
 VALID_LABELS = [
     "Lecture Notes", "Problem Set", "Exam",
-    "Reading", "Solution", "Project", "Other",
+    "Reading", "Other",
 ]
 
-AUTO_APPLY_THRESHOLD = 0.90
+AUTO_APPLY_THRESHOLD = 0.75
 SUGGEST_THRESHOLD    = 0.50
 
 
