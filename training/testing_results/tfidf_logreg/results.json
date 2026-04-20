@@ -1,0 +1,18 @@
+{
+  "model": "tfidf_logreg",
+  "quality_gate": {
+    "macro_f1_threshold": 0.5,
+    "min_class_f1_threshold": 0.3
+  },
+  "run": {
+    "name": "B",
+    "label_strategy": "merge_other_project_solution",
+    "labels": ["Lecture Notes", "Other", "Problem Set", "Exam", "Reading"],
+    "mlflow_run_id": "ba5800f81651455b89ba375f9c4ea801",
+    "test_accuracy": 0.551604938271605,
+    "test_macro_f1": 0.419768,
+    "test_weighted_f1": 0.521768,
+    "min_class_f1": 0.17931,
+    "quality_gate_passed": false
+  }
+}

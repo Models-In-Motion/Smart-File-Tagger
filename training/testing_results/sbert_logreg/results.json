@@ -1,0 +1,18 @@
+{
+  "model": "sbert_logreg",
+  "quality_gate": {
+    "macro_f1_threshold": 0.5,
+    "min_class_f1_threshold": 0.3
+  },
+  "run": {
+    "name": "B",
+    "label_strategy": "merge_other_project_solution",
+    "labels": ["Lecture Notes", "Other", "Problem Set", "Exam", "Reading"],
+    "mlflow_run_id": "4d26d4261a60429db421bcb118584406",
+    "test_accuracy": 0.534320987654321,
+    "test_macro_f1": 0.426264,
+    "test_weighted_f1": 0.511065,
+    "min_class_f1": 0.194774,
+    "quality_gate_passed": false
+  }
+}

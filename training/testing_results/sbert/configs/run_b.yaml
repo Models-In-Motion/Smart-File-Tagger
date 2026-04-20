@@ -1,0 +1,12 @@
+data:
+  path: /app/data_artifacts/versions/v6/train_llm_merged_ops.parquet
+  eval_path: /app/data_artifacts/versions/v6/eval_llm_merged_ops.parquet
+  text_col: extracted_text
+  label_col: llm_label_merged
+  allowed_labels: [Lecture Notes, Other, Problem Set, Exam, Reading]
+split:
+  train_size: 0.70
+  val_size: 0.15
+  test_size: 0.15
+  random_state: 42
+  val_from_eval_size: 0.5
