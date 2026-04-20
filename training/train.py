@@ -15,6 +15,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass
@@ -103,6 +104,37 @@ def get_git_sha() -> str:
 
 def slugify(label: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
+
+
+def resolve_serving_bundle_destination() -> Path:
+    """Resolve where the serving model bundle must be copied.
+
+    Priority:
+    1) SERVING_MODEL_BUNDLE_PATH env var (recommended for Docker)
+    2) common local repo layouts
+    """
+    env_path = os.environ.get("SERVING_MODEL_BUNDLE_PATH")
+    if env_path:
+        return Path(env_path)
+
+    candidates = [
+        Path.cwd() / "../serving/models/model_bundle.joblib",
+        Path.cwd() / "serving/models/model_bundle.joblib",
+        Path(__file__).resolve().parent.parent / "serving/models/model_bundle.joblib",
+    ]
+    for candidate in candidates:
+        if candidate.parent.exists():
+            return candidate
+
+    # Fall back to repo-style path from current working directory.
+    return Path.cwd() / "../serving/models/model_bundle.joblib"
+
+
+def sync_bundle_to_serving(artifact_path: Path) -> Path:
+    dest = resolve_serving_bundle_destination()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(artifact_path, dest)
+    return dest
 
 
 def load_filtered_frame(
@@ -486,6 +518,8 @@ def main() -> None:
         "label_col": cfg["data"]["label_col"],
     }
     joblib.dump(bundle, artifact_path)
+    serving_bundle_path = sync_bundle_to_serving(artifact_path)
+    print(f"Synced serving bundle to {serving_bundle_path}", flush=True)
 
     runtime_metrics["model_artifact_size_bytes"] = int(artifact_path.stat().st_size)
 

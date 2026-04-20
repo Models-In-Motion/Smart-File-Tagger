@@ -86,10 +86,13 @@ services:
       DB_URL: postgresql://tagger:tagger@postgres:5432/tagger
       MLFLOW_TRACKING_URI: http://mlflow:5000
       ARTIFACT_DIR: /app/artifacts
+      SERVING_MODEL_BUNDLE_PATH: /app/serving_models/model_bundle.joblib
     volumes:
       - ./training/artifacts:/app/artifacts
       # Mount Viral's data so training can read train/eval parquet files
       - ./data/artifacts:/app/data_artifacts:ro
+      # Ensure training always updates the serving bundle on the host.
+      - ./serving/models:/app/serving_models
     depends_on:
       postgres:
         condition: service_healthy
@@ -106,9 +109,11 @@ services:
       DB_URL: postgresql://tagger:tagger@postgres:5432/tagger
       MLFLOW_TRACKING_URI: http://mlflow:5000
       ARTIFACT_DIR: /app/artifacts
+      SERVING_MODEL_BUNDLE_PATH: /app/serving_models/model_bundle.joblib
     volumes:
       - ./training/artifacts:/app/artifacts
       - ./data/artifacts:/app/data_artifacts:ro
+      - ./serving/models:/app/serving_models
     depends_on:
       postgres:
         condition: service_healthy
