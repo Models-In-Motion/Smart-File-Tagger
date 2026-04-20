@@ -1,6 +1,6 @@
 # Run B Integration Guide (5 Labels)
 
-This is the only recommended setup for teammate integration on this branch.
+This is the only supported setup for teammate integration on this branch.
 
 ## Labels
 
@@ -27,7 +27,7 @@ Fallback local-built bundle:
 
 ## Canonical Configs
 
-The default configs in this branch are already aligned to Run B:
+The default configs in this branch are aligned to Run B:
 
 - `training/configs/train.yaml`
 - `training/configs/train_docker.yaml`
@@ -55,7 +55,3 @@ docker compose run --rm training \
 - Test Weighted F1: `0.6199`
 - Min Class F1: `0.3008`
 - Quality Gate: `PASS`
-
-## Note
-
-Run A and Run C artifacts remain in this branch for historical comparison only.

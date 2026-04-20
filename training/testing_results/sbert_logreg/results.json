@@ -4,36 +4,15 @@
     "macro_f1_threshold": 0.5,
     "min_class_f1_threshold": 0.3
   },
-  "runs": [
-    {
-      "run": "A",
-      "label_strategy": "unmerged_llm_label",
-      "labels": ["Lecture Notes", "Other", "Problem Set", "Exam", "Project", "Reading", "Solution"],
-      "mlflow_run_id": "848decab02e1482ba3a92e333a8f60b9",
-      "test_accuracy": 0.5358024691358025,
-      "test_macro_f1": 0.334176,
-      "min_class_f1": 0.0,
-      "quality_gate_passed": false
-    },
-    {
-      "run": "B",
-      "label_strategy": "merge_other_project_solution",
-      "labels": ["Lecture Notes", "Other", "Problem Set", "Exam", "Reading"],
-      "mlflow_run_id": "4d26d4261a60429db421bcb118584406",
-      "test_accuracy": 0.534320987654321,
-      "test_macro_f1": 0.426264,
-      "min_class_f1": 0.194774,
-      "quality_gate_passed": false
-    },
-    {
-      "run": "C",
-      "label_strategy": "merge_other_project_solution_exam",
-      "labels": ["Lecture Notes", "Other", "Problem Set", "Reading"],
-      "mlflow_run_id": "a988a4287c0e457a97ff731783fe93b8",
-      "test_accuracy": 0.5496296296296296,
-      "test_macro_f1": 0.508274,
-      "min_class_f1": 0.345865,
-      "quality_gate_passed": true
-    }
-  ]
+  "run": {
+    "name": "B",
+    "label_strategy": "merge_other_project_solution",
+    "labels": ["Lecture Notes", "Other", "Problem Set", "Exam", "Reading"],
+    "mlflow_run_id": "4d26d4261a60429db421bcb118584406",
+    "test_accuracy": 0.534320987654321,
+    "test_macro_f1": 0.426264,
+    "test_weighted_f1": 0.511065,
+    "min_class_f1": 0.194774,
+    "quality_gate_passed": false
+  }
 }
