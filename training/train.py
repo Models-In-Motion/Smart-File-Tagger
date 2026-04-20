@@ -148,6 +148,36 @@ def sync_bundle_to_serving(artifact_path: Path) -> Path:
     return dest
 
 
+def resolve_train_data_path(data_cfg: dict[str, Any]) -> str:
+    """Resolve training parquet path with a fallback for first-time retrain runs."""
+    primary_path = str(data_cfg["path"])
+    if Path(primary_path).exists():
+        return primary_path
+
+    fallback_candidates: list[str] = []
+    explicit_fallback = data_cfg.get("fallback_path")
+    if explicit_fallback:
+        fallback_candidates.append(str(explicit_fallback))
+
+    feedback_name = "run_b_train_with_feedback.parquet"
+    base_name = "run_b_train_llm_merged_ops.parquet"
+    if primary_path.endswith(feedback_name):
+        fallback_candidates.append(primary_path.replace(feedback_name, base_name))
+
+    for fallback_path in fallback_candidates:
+        if Path(fallback_path).exists():
+            print(
+                f"[WARN] Training data not found at '{primary_path}'. "
+                f"Falling back to '{fallback_path}'.",
+                flush=True,
+            )
+            return fallback_path
+
+    raise FileNotFoundError(
+        f"Training data not found at '{primary_path}', and no valid fallback was found."
+    )
+
+
 def load_filtered_frame(
     path: str,
     text_col: str,
@@ -187,8 +217,9 @@ def load_and_filter_data(cfg: dict[str, Any]) -> tuple[pd.Series, pd.Series, pd.
     text_col = data_cfg["text_col"]
     label_col = data_cfg["label_col"]
     allowed_labels = data_cfg.get("allowed_labels")
+    train_path = resolve_train_data_path(data_cfg)
     df = load_filtered_frame(
-        path=data_cfg["path"],
+        path=train_path,
         text_col=text_col,
         label_col=label_col,
         allowed_labels=allowed_labels,
@@ -213,8 +244,9 @@ def load_pre_split_data(cfg: dict[str, Any]) -> tuple[SplitData, LabelEncoder] |
     if not 0.0 < val_from_eval_size < 1.0:
         raise ValueError("split.val_from_eval_size must be between 0 and 1")
 
+    train_path = resolve_train_data_path(data_cfg)
     train_df = load_filtered_frame(
-        path=data_cfg["path"],
+        path=train_path,
         text_col=text_col,
         label_col=label_col,
         allowed_labels=allowed_labels,

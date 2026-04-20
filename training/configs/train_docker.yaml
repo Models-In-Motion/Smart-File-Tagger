@@ -2,6 +2,7 @@ data:
   # Feedback-enriched train set produced by retrain_trigger.py → batch_pipeline.py.
   # Falls back to Run B base if the enriched file hasn't been generated yet.
   path: /app/testing_results/parquet/run_b_train_with_feedback.parquet
+  fallback_path: /app/testing_results/parquet/run_b_train_llm_merged_ops.parquet
   eval_path: /app/testing_results/parquet/run_b_eval_llm_merged_ops.parquet
   text_col: extracted_text
   label_col: llm_label_merged

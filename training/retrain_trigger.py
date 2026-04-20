@@ -117,7 +117,7 @@ if __name__ == "__main__":
         pipeline_ok = run_batch_pipeline()
         if not pipeline_ok:
             print("[retrain_trigger] Batch pipeline failed — skipping retraining.")
-            return
+            raise SystemExit(1)
         success = trigger_retraining()
         if success:
             log_retrain_trigger(f"feedback_threshold_{FEEDBACK_THRESHOLD}")
