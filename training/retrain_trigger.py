@@ -18,6 +18,9 @@ DB_URL = os.getenv("DB_URL", "postgresql://tagger:tagger@postgres:5432/tagger")
 BASE_TRAIN_PATH    = "/app/testing_results/parquet/run_b_train_llm_merged_ops.parquet"
 FEEDBACK_TRAIN_PATH = "/app/testing_results/parquet/run_b_train_with_feedback.parquet"
 BATCH_PIPELINE_PATH = "/app/data_pipeline/batch_pipeline.py"
+VALIDATE_SCRIPT_PATH = "/app/data_pipeline/validate_dataset.py"
+EVAL_PATH = "/app/testing_results/parquet/run_b_eval_llm_merged_ops.parquet"
+RUN_B_LABELS = ["Lecture Notes", "Other", "Problem Set", "Exam", "Reading"]
 
 
 def ensure_retrain_log_table(conn) -> None:
@@ -88,9 +91,34 @@ def run_batch_pipeline() -> bool:
     return result.returncode == 0
 
 
+def run_dataset_validation() -> bool:
+    """
+    Step 2: Validate enriched train/eval data quality before training.
+    Uses validate_dataset.py with Run B settings.
+    """
+    print("[retrain_trigger] Step 2: Running dataset validation gate...")
+    result = subprocess.run(
+        [
+            "python", VALIDATE_SCRIPT_PATH,
+            "--raw", FEEDBACK_TRAIN_PATH,
+            "--train", FEEDBACK_TRAIN_PATH,
+            "--eval", EVAL_PATH,
+            "--label-col", "llm_label_merged",
+            "--required-labels", *RUN_B_LABELS,
+            "--min-examples", "50",
+            "--min-words", "10",
+            "--max-bad-text-pct", "1.0",
+        ],
+        check=False,
+    )
+    if result.returncode != 0:
+        print("[retrain_trigger] Dataset validation failed — aborting retraining.")
+    return result.returncode == 0
+
+
 def trigger_retraining() -> bool:
-    """Step 2: Train on the feedback-enriched parquet produced by run_batch_pipeline()."""
-    print("[retrain_trigger] Step 2: Triggering retraining on enriched dataset...")
+    """Step 3: Train on the feedback-enriched parquet produced by run_batch_pipeline()."""
+    print("[retrain_trigger] Step 3: Triggering retraining on enriched dataset...")
     result = subprocess.run(
         [
             "python",
@@ -118,11 +146,18 @@ if __name__ == "__main__":
         if not pipeline_ok:
             print("[retrain_trigger] Batch pipeline failed — skipping retraining.")
             raise SystemExit(1)
-        success = trigger_retraining()
-        if success:
-            log_retrain_trigger(f"feedback_threshold_{FEEDBACK_THRESHOLD}")
-            print("[retrain_trigger] Retraining complete, logged.")
         else:
-            print("[retrain_trigger] Retraining failed.")
+            validation_ok = run_dataset_validation()
+            if not validation_ok:
+                print("[retrain_trigger] Validation failed — skipping retraining.")
+                raise SystemExit(1)
+            else:
+                success = trigger_retraining()
+                if success:
+                    log_retrain_trigger(f"feedback_threshold_{FEEDBACK_THRESHOLD}")
+                    print("[retrain_trigger] Retraining complete, logged.")
+                else:
+                    print("[retrain_trigger] Retraining failed.")
+                    raise SystemExit(1)
     else:
         print("[retrain_trigger] Below threshold, no retraining needed.")

@@ -45,15 +45,15 @@ def looks_like_garbage(text: str) -> bool:
     return alpha_ratio < 0.5
 
 
-def validate_text_quality(df: pd.DataFrame) -> tuple[list[str], pd.Series, int]:
+def validate_text_quality(df: pd.DataFrame, min_words: int) -> tuple[list[str], pd.Series, int]:
     issues: list[str] = []
 
     text_series = df["extracted_text"].astype(str)
 
     word_counts = text_series.str.split().str.len()
-    too_short_mask = word_counts < 20
+    too_short_mask = word_counts < min_words
     too_short = int(too_short_mask.sum())
-    issues.append(f"Too short (<20 words): {too_short} rows ({too_short/len(df)*100:.1f}%)")
+    issues.append(f"Too short (<{min_words} words): {too_short} rows ({too_short/len(df)*100:.1f}%)")
 
     garbage_mask = text_series.apply(looks_like_garbage)
     garbage_rows = int(garbage_mask.sum())
@@ -72,12 +72,18 @@ def validate_text_quality(df: pd.DataFrame) -> tuple[list[str], pd.Series, int]:
     return issues, bad_mask, strings_rows
 
 
-def validate_label_distribution(df: pd.DataFrame, split_name: str, min_examples: int) -> tuple[list[str], bool]:
+def validate_label_distribution(
+    df: pd.DataFrame,
+    split_name: str,
+    min_examples: int,
+    label_col: str,
+    required_labels: list[str],
+) -> tuple[list[str], bool]:
     issues: list[str] = []
-    dist = df["label"].value_counts()
+    dist = df[label_col].value_counts()
     ok = True
 
-    for label in REQUIRED_LABELS:
+    for label in required_labels:
         count = int(dist.get(label, 0))
         if count < min_examples:
             issues.append(f"FAIL [{split_name}]: {label} has only {count} examples (need {min_examples})")
@@ -85,7 +91,7 @@ def validate_label_distribution(df: pd.DataFrame, split_name: str, min_examples:
         else:
             issues.append(f"OK   [{split_name}]: {label} = {count}")
 
-    unexpected = sorted(set(dist.index) - set(REQUIRED_LABELS))
+    unexpected = sorted(set(dist.index) - set(required_labels))
     if unexpected:
         issues.append(f"WARNING [{split_name}]: Unexpected labels found: {unexpected}")
 
@@ -114,6 +120,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train", default="data/artifacts/versions/v3/train.parquet")
     parser.add_argument("--eval", dest="eval_path", default="data/artifacts/versions/v3/eval.parquet")
     parser.add_argument("--min-examples", type=int, default=50)
+    parser.add_argument("--min-words", type=int, default=20)
+    parser.add_argument(
+        "--max-bad-text-pct",
+        type=float,
+        default=0.0,
+        help="Maximum allowed percentage of bad-text rows before failing",
+    )
+    parser.add_argument(
+        "--label-col",
+        default="label",
+        help="Label column to validate in train/eval (e.g., label or llm_label_merged)",
+    )
+    parser.add_argument(
+        "--required-labels",
+        nargs="*",
+        default=REQUIRED_LABELS,
+        help="Expected labels for minimum-count checks",
+    )
     return parser.parse_args()
 
 
@@ -142,14 +166,14 @@ def main() -> int:
     print(f"Train split: {len(train)} rows ({train_path})")
     print(f"Eval split:  {len(eval_df)} rows ({eval_path})")
 
-    required_cols = ["extracted_text", "label", "course_id", "text_extraction_method"]
+    required_cols = ["extracted_text", args.label_col, "course_id", "text_extraction_method"]
     for col in required_cols:
         if col not in raw.columns:
             print(f"\n[FAIL] Raw dataset missing required column: {col}")
             return 1
 
     print("\n--- CHECK 1: Text Quality ---")
-    text_issues, bad_mask, strings_rows = validate_text_quality(raw)
+    text_issues, bad_mask, strings_rows = validate_text_quality(raw, args.min_words)
     for issue in text_issues:
         print(issue)
     bad_rows = int(bad_mask.sum())
@@ -158,12 +182,22 @@ def main() -> int:
     print(f"Rows using strings backend: {strings_rows}")
 
     print("\n--- CHECK 2: Label Distribution (train) ---")
-    train_issues, train_ok = validate_label_distribution(train, "train", args.min_examples)
+    if args.label_col not in train.columns:
+        print(f"[FAIL] Train split missing label column '{args.label_col}'")
+        return 1
+    train_issues, train_ok = validate_label_distribution(
+        train, "train", args.min_examples, args.label_col, args.required_labels
+    )
     for issue in train_issues:
         print(issue)
 
     print("\n--- CHECK 2: Label Distribution (eval) ---")
-    eval_issues, eval_ok = validate_label_distribution(eval_df, "eval", args.min_examples)
+    if args.label_col not in eval_df.columns:
+        print(f"[FAIL] Eval split missing label column '{args.label_col}'")
+        return 1
+    eval_issues, eval_ok = validate_label_distribution(
+        eval_df, "eval", args.min_examples, args.label_col, args.required_labels
+    )
     for issue in eval_issues:
         print(issue)
 
@@ -175,8 +209,11 @@ def main() -> int:
     failures: list[str] = []
     if strings_rows > 0:
         failures.append(f"strings backend present ({strings_rows} rows)")
-    if bad_rows > 0:
-        failures.append(f"garbage/short text rows present ({bad_rows})")
+    if bad_pct > args.max_bad_text_pct:
+        failures.append(
+            f"garbage/short text rows present ({bad_rows}, {bad_pct:.1f}%) "
+            f"exceeds max allowed {args.max_bad_text_pct:.1f}%"
+        )
     if not train_ok:
         failures.append("train label minimum check failed")
     if not eval_ok:
