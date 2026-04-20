@@ -195,6 +195,39 @@ class TagController extends Controller {
 
     /**
      * @NoAdminRequired
+     * @NoCSRFRequired
+     */
+    public function suggestion(string $fileId): JSONResponse {
+        $user = $this->userSession->getUser();
+        $userId = $user ? $user->getUID() : '';
+
+        if ($userId === '') {
+            return new JSONResponse(['tag' => null], 200);
+        }
+
+        // Read from suggestion store
+        if (!is_file($this->suggestionStorePath)) {
+            return new JSONResponse(['tag' => null], 200);
+        }
+
+        $raw = @file_get_contents($this->suggestionStorePath);
+        $data = json_decode((string)$raw, true);
+
+        $suggestion = $data[$userId][$fileId] ?? null;
+        if (!$suggestion) {
+            return new JSONResponse(['tag' => null], 200);
+        }
+
+        return new JSONResponse([
+            'tag' => $suggestion['predicted_tag'],
+            'confidence' => $suggestion['confidence'],
+            'explanation' => null,
+            'file_id' => $fileId,
+        ]);
+    }
+
+    /**
+     * @NoAdminRequired
      */
     public function reject(): JSONResponse {
         $fileId = (string)$this->request->getParam('fileId');

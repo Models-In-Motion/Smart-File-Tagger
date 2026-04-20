@@ -12,6 +12,9 @@ return [
         // Called by JS when user clicks Reject on a suggestion
         ['name' => 'tag#reject',           'url' => '/reject',               'verb' => 'POST'],
 
+        // Called by JS to load pending suggestion for file
+        ['name' => 'tag#suggestion',       'url' => '/suggestion/{fileId}',  'verb' => 'GET'],
+
         // Category manager — renders the settings page
         ['name' => 'category#index',       'url' => '/categories',           'verb' => 'GET'],
 
