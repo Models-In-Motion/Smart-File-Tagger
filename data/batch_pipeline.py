@@ -192,6 +192,12 @@ def load_corrected_feedback_training_rows(
         row["doc_id"] = doc_id
         row["extracted_text"] = text
         row["label"] = label
+        # Keep legacy and Run-B label columns in sync when present so feedback rows
+        # are consumable by both training schemas.
+        if "llm_label_merged" in row:
+            row["llm_label_merged"] = label
+        if "llm_label" in row:
+            row["llm_label"] = label
         row["label_source"] = "user_feedback_corrected"
         row["course_id"] = "user_feedback"
         row["source_url"] = f"feedback://{file_id}"

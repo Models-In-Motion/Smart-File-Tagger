@@ -30,6 +30,7 @@ mlruns_local/
 # Data working directories
 data/raw/
 data/processed/
+data/courses/
 ocw_downloads/
 ocw_courses/
 
