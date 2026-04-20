@@ -14,6 +14,11 @@ import psycopg2
 FEEDBACK_THRESHOLD = int(os.getenv("FEEDBACK_THRESHOLD", "50"))
 DB_URL = os.getenv("DB_URL", "postgresql://tagger:tagger@postgres:5432/tagger")
 
+# Paths inside the retrain-cron container.
+BASE_TRAIN_PATH    = "/app/testing_results/parquet/run_b_train_llm_merged_ops.parquet"
+FEEDBACK_TRAIN_PATH = "/app/testing_results/parquet/run_b_train_with_feedback.parquet"
+BATCH_PIPELINE_PATH = "/app/data_pipeline/batch_pipeline.py"
+
 
 def ensure_retrain_log_table(conn) -> None:
     with conn.cursor() as cur:
@@ -65,8 +70,27 @@ def log_retrain_trigger(reason: str) -> None:
     conn.close()
 
 
+def run_batch_pipeline() -> bool:
+    """Step 1: Enrich base train parquet with latest user corrections from PostgreSQL."""
+    print("[retrain_trigger] Step 1: Running batch pipeline to append user feedback...")
+    result = subprocess.run(
+        [
+            "python", BATCH_PIPELINE_PATH,
+            "--base-train", BASE_TRAIN_PATH,
+            "--output", FEEDBACK_TRAIN_PATH,
+            "--feedback-source", "postgres",
+            "--db-url", DB_URL,
+        ],
+        check=False,
+    )
+    if result.returncode != 0:
+        print("[retrain_trigger] Batch pipeline failed — aborting retraining.")
+    return result.returncode == 0
+
+
 def trigger_retraining() -> bool:
-    print("[retrain_trigger] Triggering retraining...")
+    """Step 2: Train on the feedback-enriched parquet produced by run_batch_pipeline()."""
+    print("[retrain_trigger] Step 2: Triggering retraining on enriched dataset...")
     result = subprocess.run(
         [
             "python",
@@ -90,6 +114,10 @@ if __name__ == "__main__":
             f"[retrain_trigger] Threshold reached "
             f"({count} >= {FEEDBACK_THRESHOLD})"
         )
+        pipeline_ok = run_batch_pipeline()
+        if not pipeline_ok:
+            print("[retrain_trigger] Batch pipeline failed — skipping retraining.")
+            return
         success = trigger_retraining()
         if success:
             log_retrain_trigger(f"feedback_threshold_{FEEDBACK_THRESHOLD}")

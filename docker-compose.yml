@@ -114,6 +114,7 @@ services:
       - ./training/artifacts:/app/artifacts
       - ./data/artifacts:/app/data_artifacts:ro
       - ./serving/models:/app/serving_models
+      - ./data:/app/data_pipeline:ro
     depends_on:
       postgres:
         condition: service_healthy
