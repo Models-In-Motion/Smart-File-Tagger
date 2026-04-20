@@ -59,8 +59,8 @@ VALID_LABELS = [
     "Reading", "Solution", "Project", "Other",
 ]
 
-AUTO_APPLY_THRESHOLD = 0.65
-SUGGEST_THRESHOLD    = 0.30
+AUTO_APPLY_THRESHOLD = 0.90
+SUGGEST_THRESHOLD    = 0.50
 
 
 # ---------------------------------------------------------------------------

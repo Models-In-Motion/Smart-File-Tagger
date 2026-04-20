@@ -132,17 +132,21 @@ class TagController extends Controller {
                 $this->applyTag((string)$fileId, $predictedTag);
                 error_log("SmartFileTagger auto-applied tag '{$predictedTag}' to file {$fileId}");
             } elseif ($action === 'suggest' && $predictedTag !== '') {
+                // Apply tag with "?" prefix to indicate it's a suggestion, not confirmed
+                // This makes it visible in the Nextcloud Files UI immediately
+                $suggestedTagName = '? ' . $predictedTag;
+                $this->applyTag((string)$fileId, $suggestedTagName);
+                // Also store for JS banner (when sidebar detection works)
                 $this->storePendingSuggestion($userId, (string)$fileId, [
-                    'file_id' => (string)$fileId,
-                    'file_path' => $filePath,
-                    'predicted_tag' => $predictedTag,
-                    'confidence' => $confidence,
-                    'action' => $action,
+                    'file_id'        => (string)$fileId,
+                    'file_path'      => $filePath,
+                    'predicted_tag'  => $predictedTag,
+                    'confidence'     => $confidence,
+                    'action'         => $action,
                     'model_response' => $prediction,
                     'created_at' => gmdate('c'),
                 ]);
-                $this->pushSuggestionNotification($userId, (string)$fileId, $filePath, $predictedTag, $confidence);
-                error_log("SmartFileTagger stored suggestion '{$predictedTag}' for file {$fileId}");
+                error_log("SmartFileTagger suggested tag '? {$predictedTag}' for file {$fileId}");
             } else {
                 error_log("SmartFileTagger no_tag for file {$fileId}");
             }
@@ -170,27 +174,35 @@ class TagController extends Controller {
 
     /**
      * @NoAdminRequired
+     * @NoCSRFRequired
      */
     public function confirm(): JSONResponse {
         $fileId  = (string)$this->request->getParam('fileId');
         $tag     = (string)$this->request->getParam('tag');
-        $user = $this->userSession->getUser();
-        $userId = $user ? $user->getUID() : '';
+        $user    = $this->userSession->getUser();
+        $userId  = $user ? $user->getUID() : '';
 
         if ($fileId === '' || $tag === '' || $userId === '') {
             return new JSONResponse(['success' => false, 'error' => 'Missing fileId/tag/user'], 400);
         }
 
-        $this->applyTag($fileId, $tag);
+        // Apply the confirmed tag (remove "? " prefix if present)
+        $cleanTag = ltrim($tag, '? ');
+        $this->applyTag($fileId, $cleanTag);
+
+        // Send feedback to FastAPI in correct format
         $this->callSidecarJson('/feedback', [
-            'file_id'       => $fileId,
-            'predicted_tag' => $tag,
-            'correct_tag'   => $tag,
-            'accepted'      => true,
             'user_id'       => $userId,
+            'file_id'       => $fileId,
+            'predicted_tag' => $cleanTag,
+            'confidence'    => 0.75,
+            'action_taken'  => 'suggest',
+            'feedback_type' => 'accepted',
+            'corrected_tag' => null,
+            'model_version' => 'tfidf_lightgbm_bundle',
         ]);
 
-        return new JSONResponse(['success' => true, 'status' => 'confirmed', 'tag' => $tag]);
+        return new JSONResponse(['success' => true, 'status' => 'confirmed', 'tag' => $cleanTag]);
     }
 
     /**
@@ -228,24 +240,32 @@ class TagController extends Controller {
 
     /**
      * @NoAdminRequired
+     * @NoCSRFRequired
      */
     public function reject(): JSONResponse {
-        $fileId = (string)$this->request->getParam('fileId');
-        $tag = (string)$this->request->getParam('tag');
+        $fileId     = (string)$this->request->getParam('fileId');
+        $tag        = (string)$this->request->getParam('tag');
         $correctTag = (string)$this->request->getParam('correctTag', '');
-        $user = $this->userSession->getUser();
-        $userId = $user ? $user->getUID() : '';
+        $user       = $this->userSession->getUser();
+        $userId     = $user ? $user->getUID() : '';
 
         if ($fileId === '' || $tag === '' || $userId === '') {
             return new JSONResponse(['success' => false, 'error' => 'Missing fileId/tag/user'], 400);
         }
 
+        $cleanTag = ltrim($tag, '? ');
+
+        // Send feedback to FastAPI in correct format
+        $feedbackType = $correctTag !== '' ? 'corrected' : 'rejected';
         $this->callSidecarJson('/feedback', [
-            'file_id'       => $fileId,
-            'predicted_tag' => $tag,
-            'correct_tag'   => $correctTag !== '' ? $correctTag : null,
-            'accepted'      => false,
             'user_id'       => $userId,
+            'file_id'       => $fileId,
+            'predicted_tag' => $cleanTag,
+            'confidence'    => 0.75,
+            'action_taken'  => 'suggest',
+            'feedback_type' => $feedbackType,
+            'corrected_tag' => $correctTag !== '' ? $correctTag : null,
+            'model_version' => 'tfidf_lightgbm_bundle',
         ]);
 
         return new JSONResponse(['success' => true, 'status' => 'rejected']);
