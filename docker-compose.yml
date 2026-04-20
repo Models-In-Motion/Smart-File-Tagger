@@ -121,10 +121,10 @@ services:
         condition: service_healthy
     entrypoint: >
       sh -c "while true; do
-        echo '[retrain-cron] Starting training run at $$(date)';
-        python train.py --config configs/train_docker.yaml --model tfidf_logreg;
-        echo '[retrain-cron] Training done. Sleeping 24h.';
-        sleep 86400;
+        echo '[retrain-cron] Checking feedback trigger at $$(date)';
+        python retrain_trigger.py;
+        echo '[retrain-cron] Sleeping 1h.';
+        sleep 3600;
       done"
 
   qdrant:
