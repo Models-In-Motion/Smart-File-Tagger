@@ -28,32 +28,6 @@ VALID_LABELS = {
     "Reading", "Solution", "Project", "Other",
 }
 
-RUN_B_LABELS = {"Lecture Notes", "Other", "Problem Set", "Exam", "Reading"}
-
-
-def normalize_feedback_label_for_run_b(label: str) -> str | None:
-    """Map free-form feedback labels into the Run B 5-label taxonomy."""
-    canonical = " ".join(str(label).strip().split())
-    if not canonical:
-        return None
-
-    lookup = {
-        "lecture notes": "Lecture Notes",
-        "reading": "Reading",
-        "exam": "Exam",
-        "problem set": "Problem Set",
-        "problem sets": "Problem Set",
-        "problem set & solution": "Problem Set",
-        "problem set and solution": "Problem Set",
-        "solution": "Other",
-        "project": "Other",
-        "other": "Other",
-    }
-    normalized = lookup.get(canonical.lower())
-    if normalized in RUN_B_LABELS:
-        return normalized
-    return None
-
 
 # ---------------------------------------------------------------------------
 # Load
@@ -206,32 +180,18 @@ def load_corrected_feedback_training_rows(
 
     for _, rec in corrected.iterrows():
         file_id = str(rec["file_id"])
-        original_label = str(rec["corrected_tag"]).strip()
-        normalized_label = normalize_feedback_label_for_run_b(original_label)
+        label = str(rec["corrected_tag"]).strip()
         text = str(rec["extracted_text"] or "").strip()
-        if file_id == "" or original_label == "" or text == "":
-            continue
-        if normalized_label is None:
-            print(
-                f"[INFO] Skipping corrected feedback label outside Run B taxonomy: "
-                f"file_id={file_id} label='{original_label}'"
-            )
+        if file_id == "" or label == "" or text == "":
             continue
 
         # Stable doc id for this feedback-derived training sample.
-        doc_id = hashlib.md5(
-            f"feedback::{file_id}::{normalized_label}".encode("utf-8")
-        ).hexdigest()[:12]
+        doc_id = hashlib.md5(f"feedback::{file_id}::{label}".encode("utf-8")).hexdigest()[:12]
 
         row = {col: None for col in template_columns}
         row["doc_id"] = doc_id
         row["extracted_text"] = text
-        if "label" in row:
-            row["label"] = normalized_label
-        if "llm_label_merged" in row:
-            row["llm_label_merged"] = normalized_label
-        if "llm_label" in row:
-            row["llm_label"] = normalized_label
+        row["label"] = label
         row["label_source"] = "user_feedback_corrected"
         row["course_id"] = "user_feedback"
         row["source_url"] = f"feedback://{file_id}"
