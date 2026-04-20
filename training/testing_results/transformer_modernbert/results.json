@@ -1,0 +1,28 @@
+{
+  "model": "answerdotai/ModernBERT-base",
+  "runner": "training/scripts/transformer_finetune.py",
+  "quality_gate_reference": {
+    "macro_f1_threshold": 0.5,
+    "min_class_f1_threshold": 0.3
+  },
+  "runs": [
+    {
+      "run": "C_pilot",
+      "label_strategy": "merge_other_project_solution_exam",
+      "labels": ["Lecture Notes", "Other", "Problem Set", "Reading"],
+      "mlflow_run_id": null,
+      "test_accuracy": 0.5160493827160494,
+      "test_macro_f1": 0.4605368179811402,
+      "min_class_f1": 0.23202614379084968,
+      "quality_gate_passed_by_reference_threshold": false,
+      "n_train": 2000,
+      "n_val": 2024,
+      "n_test": 2025,
+      "epochs": 1,
+      "batch_size": 4,
+      "max_length": 192,
+      "learning_rate": 1e-5,
+      "train_seconds": 1224.4437707650013
+    }
+  ]
+}
