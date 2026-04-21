@@ -1,153 +1,214 @@
 # Safeguarding Plan — Smart File Tagger
 
-This document describes the concrete mechanisms implemented across the system to
-uphold fairness, explainability, transparency, privacy, accountability, and
-robustness. Each principle is backed by code that runs automatically — not just
-a policy statement.
+This document describes safeguards that are implemented in code for the integrated
+system (Nextcloud + serving + data + training + monitoring).
+
+It is intentionally implementation-specific: each claim maps to files currently in
+`version-1/main`.
+
+---
+
+## Current operating scope
+
+- Base ingestion taxonomy supports 7 canonical OCW labels in data pipelines:
+  `Lecture Notes`, `Problem Set`, `Exam`, `Reading`, `Solution`, `Project`, `Other`.
+- Integrated production training/retraining currently uses **Run B merged 5-label taxonomy**
+  via `llm_label_merged`:
+  `Lecture Notes`, `Other`, `Problem Set`, `Exam`, `Reading`.
+- This 5-label scope is enforced in training configs and quality gates for
+  deployment decisions.
 
 ---
 
 ## Fairness
 
-**Problem:** A classifier trained on imbalanced data will perform poorly on
-minority classes. Users whose documents fall into underrepresented categories
-get worse predictions.
+### Risk
+Minority labels and noisy correction data can cause disproportionate error rates.
 
-**Mechanisms:**
+### Implemented safeguards
 
-- `validate_ingestion()` (`data/build_ocw_dataset.py`) warns when any label has
-  fewer than 10 examples in the ingested dataset. The ETL run is flagged before
-  training data is ever produced.
-- `validate_training_set()` (`data/batch_pipeline.py`) hard-blocks writing a
-  training split if any label has fewer than 5 training examples. A model cannot
-  be trained on a split that would guarantee poor performance on a class.
-- `validate_training_set()` warns when a label's proportion in eval is more than
-  3× its proportion in train — catching evaluation sets that do not reflect the
-  training distribution.
-- The 7-label schema (`Lecture Notes`, `Problem Set`, `Exam`, `Reading`,
-  `Solution`, `Project`, `Other`) was chosen after auditing the OCW corpus.
-  Labels with zero or near-zero representation (`Recitation`, `Lab`, `Syllabus`)
-  were dropped rather than kept as phantom classes.
+- **Ingestion validation before dataset write**
+  `data/build_ocw_dataset.py::validate_ingestion()` blocks invalid or low-quality
+  rows (null required fields, invalid labels/sources, duplicate `doc_id`, empty
+  text, etc.) and warns for sparse labels.
+
+- **Split validation before train/eval artifacts are written**
+  `data/batch_pipeline.py::validate_training_set()` blocks invalid train/eval
+  splits (required columns, duplicates, tiny class counts, too-small splits,
+  leakage) and warns on severe label skew.
+
+- **Retrain-time required-label gate**
+  `training/retrain_trigger.py` runs `data/validate_dataset.py` before retraining,
+  with Run B requirements:
+  - required labels: `Lecture Notes`, `Other`, `Problem Set`, `Exam`, `Reading`
+  - minimum examples per label check
+
+- **Human correction upweighting**
+  `training/train.py` assigns sample weights (10x) to rows with
+  `source == "user_feedback"`, so verified human corrections have higher influence
+  than base rows during fit.
 
 ---
 
 ## Explainability
 
-**Problem:** Users and operators need to understand why a prediction was made,
-and why a model was retrained or rolled back.
+### Risk
+Users and operators cannot trust outcomes if decisions are opaque.
 
-**Mechanisms:**
+### Implemented safeguards
 
-- Every document in the training set carries a `label_source` column
-  (`folder_structure`, `filename_pattern`, or `no_rule_matched`) so the training
-  team can see exactly which labeling rule produced each training example.
-- `drift_report.json` (written by `drift_monitor.py` after every run) records
-  the JS divergence value, per-label distribution comparison, correction rate,
-  and which specific thresholds were exceeded — giving a human-readable
-  explanation of any rollback trigger.
-- `split_metadata.json` (written by `batch_pipeline.py` for every version)
-  records the exact course IDs in each split, label counts, and the timestamp —
-  so any training run can be traced back to the exact data that produced it.
+- **Prediction confidence + ranked alternatives returned to clients**
+  Serving responses include predicted tag, confidence, and top predictions
+  (`serving/app/main.py`, `serving/app/predictor.py`).
+
+- **Data lineage and split provenance persisted**
+  `data/batch_pipeline.py` writes `split_metadata.json` for each dataset version
+  (row counts, label distributions, course split info, timestamp).
+
+- **Drift reasoning persisted**
+  `data/drift_monitor.py` writes detailed drift diagnostics both to
+  `drift_report.json` and `drift_metrics.details` (JSONB), including threshold
+  breaches and per-check outcomes.
+
+- **Retrain decision trace**
+  `training/retrain_trigger.py` writes retrain events into `retrain_log`.
 
 ---
 
 ## Transparency
 
-**Problem:** Black-box pipelines make it impossible to audit decisions or
-reproduce results.
+### Risk
+Without auditable telemetry, model changes and regressions cannot be defended.
 
-**Mechanisms:**
+### Implemented safeguards
 
-- All training data versions are written to `data/artifacts/versions/<version>/`
-  with a `split_metadata.json` that is human-readable and committed alongside
-  the code.
-- MLflow tracks every training run with parameters, metrics, and the artifact
-  version used (read from `split_metadata.json` by `train.py`).
-- The `drift_metrics` PostgreSQL table provides a permanent audit trail of every
-  drift monitor run — timestamp, all metric values, and pass/fail status.
-- Confidence scores are exposed on every `/predict` response so the serving
-  layer can show users when the model is uncertain (confidence thresholds:
-  >0.85 auto-tag, 0.5–0.85 suggestion, <0.5 no tag).
+- **MLflow run tracking for training/retraining**
+  `training/train.py` logs parameters, metrics, runtime costs, gate metrics, and
+  artifacts (`metrics_summary.json`, model artifacts, bundle).
+
+- **Model registry integration with stage transitions**
+  `training/train.py` registers passing models in MLflow and attempts promotion to
+  Staging through `training/model_registry.py`.
+
+- **Persistent monitoring signal storage**
+  Drift, feedback, predictions, and retrain events are persisted in PostgreSQL
+  tables (`drift_metrics`, `feedback`, `predictions`, `retrain_log`).
 
 ---
 
 ## Privacy
 
-**Problem:** Training on user-uploaded documents risks memorising or leaking
-personal content.
+### Risk
+Production feedback loop can ingest user-derived text; this must be limited and
+controlled.
 
-**Mechanisms:**
+### Implemented safeguards
 
-- The training dataset is built entirely from publicly licensed MIT OCW course
-  materials. No user-uploaded files are ever used for training.
-- The `data_generator.py` simulation script sends only a 512-character text
-  snippet to `/predict` — not the full document.
-- The feedback table stores only `doc_id`, `predicted_label`, `user_action`, and
-  `user_label` — no document content is persisted in the feedback log.
-- PostgreSQL is deployed with credentials scoped to the `tagger` database only
-  (`postgresql://tagger:tagger@postgres:5432/tagger`). No cross-database access.
+- **No raw file bytes stored in training artifacts**
+  Training uses extracted text features, not uploaded binary files.
+
+- **Bounded text retention in predictions table**
+  `serving/app/feedback.py::log_prediction()` truncates stored `extracted_text`
+  to max 10,000 chars before DB write.
+
+- **Scoped feedback schema**
+  Feedback/prediction logs store operational identifiers and labels
+  (`file_id`, `user_id`, tags, confidence, model version, timestamps), not full
+  user account profiles.
+
+- **Synthetic traffic generator sends only snippets**
+  `data/data_generator.py` limits text sent to `/predict` (`TEXT_CHARS = 512`) in
+  emulated traffic mode.
+
+- **DB credentials isolated to project DB**
+  Compose services use the dedicated `tagger` PostgreSQL database.
+
+> Note: In the integrated retrain loop, corrected user feedback is intentionally
+> incorporated into retraining (`batch_pipeline.py` append mode). This is required
+> for closing the feedback loop, and is controlled by the gates listed above.
 
 ---
 
 ## Accountability
 
-**Problem:** When something goes wrong (bad predictions, model degradation), it
-must be possible to identify what changed, when, and who/what triggered it.
+### Risk
+If model quality degrades, we need deterministic attribution and rollback.
 
-**Mechanisms:**
+### Implemented safeguards
 
-- `split_metadata.json` is written for every dataset version with a UTC
-  timestamp and full provenance (course IDs, label distributions, row counts).
-- `drift_metrics` table records every hourly monitor run with all metric values
-  and a `details` JSONB column containing the full report — permanently
-  queryable.
-- MLflow model registry (`model_registry.py`) records every promoted model
-  version with the training run ID, metrics, and promotion timestamp.
-- `retrain_log` table (Vedant's `retrain_trigger.py`) records every retraining
-  event with the number of corrections that triggered it.
-- Rollback events are triggered automatically by `monitor.py` reading the
-  `drift_metrics` table — the trigger is logged, not a silent manual action.
+- **Hourly feedback-threshold trigger**
+  `docker-compose.yml` runs `retrain-cron` hourly; `training/retrain_trigger.py`
+  retrains only when corrected feedback count since last trigger exceeds
+  threshold (`FEEDBACK_THRESHOLD`, default 50).
+
+- **Append-only feedback enrichment with explicit source tagging**
+  `data/batch_pipeline.py` appends correction-derived rows with
+  `source = "user_feedback"`, preserving provenance.
+
+- **Rollback state persisted centrally**
+  `serving/app/feedback.py` stores rollback flags in `model_status` table so
+  all serving workers share consistent rollback state.
+
+- **Automated monitor decisions logged and actioned**
+  `serving/app/monitor.py` evaluates rollback/promotion checks and calls serving
+  admin endpoints for rollback/restore/load-model decisions.
 
 ---
 
 ## Robustness
 
-**Problem:** The system must degrade gracefully under data quality issues,
-infrastructure failures, and distribution shift.
+### Risk
+Bad data, unstable retrains, or drift can silently degrade production.
 
-**Mechanisms:**
+### Implemented safeguards
 
-- `validate_ingestion()` has 8 hard checks that block bad data from entering the
-  pipeline. A single corrupt ETL run cannot silently poison the training set.
-- `validate_training_set()` has 7 hard checks that block the batch pipeline from
-  writing a split that would produce a broken model.
-- Course-level train/eval splitting (`course_level_split()`) prevents data
-  leakage — no course appears in both splits.
-- `drift_monitor.py` runs hourly and exits with code 1 if hard drift thresholds
-  are exceeded, triggering automatic rollback to the stub model via
-  `monitor.py`. The system does not wait for a human to notice degradation.
-- All three scripts (`build_ocw_dataset.py`, `batch_pipeline.py`,
-  `drift_monitor.py`) fall back gracefully when optional dependencies are
-  unavailable (e.g. PostgreSQL unreachable → falls back to JSONL; scipy missing
-  → clear error message).
-- The serving layer continues operating if the ML service is down — Nextcloud
-  manual tagging always remains available as a fallback.
+- **Data quality hard gates before retrain**
+  Retrain flow executes:
+  1. append feedback rows (`batch_pipeline.py --base-train ... --output ...`)
+  2. validate enriched data (`validate_dataset.py`)
+  3. run training (`train.py`)
+
+- **Safe first-run fallback for feedback parquet**
+  `training/train.py::resolve_train_data_path()` falls back from
+  `run_b_train_with_feedback.parquet` to
+  `run_b_train_llm_merged_ops.parquet` if enriched data is absent.
+
+- **Quality gates before deployment artifact sync/registration**
+  `training/train.py` enforces:
+  - `core_macro_f1 >= 0.50`
+  - all core-label F1 `>= 0.30`
+  for core labels: `Lecture Notes`, `Other`, `Problem Set`, `Exam`, `Reading`.
+
+  Only when gates pass:
+  - bundle is copied to serving model path (`sync_bundle_to_serving`)
+  - model is registered/logged for promotion.
+
+- **Leakage prevention by course-level split design**
+  `data/batch_pipeline.py::course_level_split()` keeps train/eval course sets
+  disjoint.
+
+- **Online rollback triggers**
+  `serving/app/monitor.py` triggers rollback on high error/correction signals and
+  promotes staged models only after canary checks.
+
+- **Fail-open prediction path for non-critical writes**
+  Serving continues inference even if prediction/feedback DB logging fails
+  (`serving/app/feedback.py` logs warnings without crashing prediction flow).
 
 ---
 
-## Summary table
+## Safeguard map (code anchors)
 
-| Principle | Key mechanism | Where in code |
+| Principle | Mechanism | Code anchor |
 |---|---|---|
-| Fairness | Block training if any label < 5 examples | `batch_pipeline.py:validate_training_set()` |
-| Fairness | Warn on label imbalance at ingestion | `build_ocw_dataset.py:validate_ingestion()` |
-| Explainability | `label_source` on every training row | `build_ocw_dataset.py:modern_course_records()` |
-| Explainability | `drift_report.json` explains every rollback | `drift_monitor.py` |
-| Transparency | `split_metadata.json` per dataset version | `batch_pipeline.py:write_outputs()` |
-| Transparency | MLflow tracks every training run | `training/train.py` |
-| Privacy | Training data is public OCW only, no user content | `data/build_ocw_dataset.py` |
-| Privacy | Feedback stores no document content | `serving/app/feedback.py` |
-| Accountability | `drift_metrics` table — permanent audit trail | `drift_monitor.py` |
-| Accountability | `retrain_log` table — retraining history | `training/retrain_trigger.py` |
-| Robustness | Hard validation gates block bad data/splits | `validate_ingestion()`, `validate_training_set()` |
-| Robustness | Automatic rollback on drift threshold breach | `drift_monitor.py` → `monitor.py` |
+| Fairness | Ingestion hard checks and sparse-label warnings | `data/build_ocw_dataset.py::validate_ingestion()` |
+| Fairness | Train/eval split quality + leakage checks | `data/batch_pipeline.py::validate_training_set()` |
+| Fairness | Human-correction sample weighting | `training/train.py::compute_sample_weights()` |
+| Explainability | Confidence + top predictions in API output | `serving/app/main.py`, `serving/app/predictor.py` |
+| Explainability | Versioned split metadata and drift reports | `data/batch_pipeline.py`, `data/drift_monitor.py` |
+| Transparency | MLflow params/metrics/artifacts tracking | `training/train.py` |
+| Privacy | Truncated extracted text in predictions logs | `serving/app/feedback.py::log_prediction()` |
+| Accountability | Hourly thresholded retrain trigger + retrain_log | `docker-compose.yml`, `training/retrain_trigger.py` |
+| Robustness | Validation gate before retrain + quality gates before bundle sync | `training/retrain_trigger.py`, `training/train.py` |
+| Robustness | Monitor-driven rollback/promotion | `serving/app/monitor.py` |
+
