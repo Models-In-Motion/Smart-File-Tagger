@@ -72,11 +72,7 @@ Label counts in canonical dataset:
 
 ### Planning and project docs
 
-1. `PIPELINE_PLAN_CHAMELEON.md`
-   Data-role plan and local->Chameleon runbook.
-2. `proposal.pdf`
-   Project proposal.
-3. `course_urls_example.txt`
+1. `course_urls_example.txt`
    Example list format for downloader input.
 
 ### Data and outputs
@@ -296,4 +292,3 @@ For teammates:
 1. Use `build_ocw_dataset.py` as the only ETL entrypoint for current pipeline work.
 2. Treat `artifacts/ocw_dataset.parquet` as the canonical data contract for data->training integration.
 3. Use `artifacts/versions/v1/*` as training-ready split outputs.
-4. Review `PIPELINE_PLAN_CHAMELEON.md` for deployment checklist and command order.

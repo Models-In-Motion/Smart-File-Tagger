@@ -249,14 +249,6 @@ cd data && pytest tests/
 
 ---
 
-## Dataset
-
-Training uses **QS-OCR-Large** — 400,000 pre-OCR'd text documents across 15 categories, derived from RVL-CDIP. Text extraction has already been performed, so no image processing is required during training. The dataset provides a warm-start baseline; per-user retraining adapts the model away from the training distribution toward each user's actual documents.
-
-Source: [QuickSign/ocrized-text-dataset](https://github.com/QuickSign/ocrized-text-dataset)
-
----
-
 ## Data pipeline operations (merged from data branch)
 
 The data branch adds a concrete OCW-oriented pipeline path for generating training-ready artifacts and simulated feedback. The canonical ETL entrypoint is:
