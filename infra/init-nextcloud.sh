@@ -2,7 +2,7 @@
 # Waits for Nextcloud to fully initialize then enables the app
 # Run this after docker-compose up
 
-CONTAINER="smart-file-tagger-nextcloud-1"
+CONTAINER="smart-file-tagger_nextcloud_1"
 MAX_WAIT=120
 WAITED=0
 
@@ -29,7 +29,7 @@ docker exec "$CONTAINER" chown -R www-data:www-data /var/www/html/custom_apps/
 # Enable our app
 docker exec --user www-data "$CONTAINER" php occ app:enable smartfiletagger
 
-docker exec --user www-data smart-file-tagger-nextcloud-1 \
+docker exec --user www-data smart-file-tagger_nextcloud_1 \
   php occ config:system:set trusted_domains 1 --value=nextcloud
 echo "Trusted domains configured."
 

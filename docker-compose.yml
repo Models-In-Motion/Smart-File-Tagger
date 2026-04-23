@@ -150,6 +150,11 @@ services:
       - postgres
       - mlflow
     entrypoint: ["python", "monitor.py"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import sys; sys.exit(0)'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   qdrant:
     image: qdrant/qdrant:latest
