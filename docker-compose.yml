@@ -93,6 +93,7 @@ services:
       MLFLOW_TRACKING_URI: http://mlflow:5000
       ARTIFACT_DIR: /app/artifacts
       SERVING_MODEL_BUNDLE_PATH: /app/serving_models/model_bundle.joblib
+      FEEDBACK_THRESHOLD: "5"
     volumes:
       - ./training/artifacts:/app/artifacts
       - ./data/artifacts:/app/data_artifacts:ro
@@ -115,11 +116,13 @@ services:
       MLFLOW_TRACKING_URI: http://mlflow:5000
       ARTIFACT_DIR: /app/artifacts
       SERVING_MODEL_BUNDLE_PATH: /app/serving_models/model_bundle.joblib
+      FEEDBACK_THRESHOLD: "5"
     volumes:
       - ./training/artifacts:/app/artifacts
       - ./data/artifacts:/app/data_artifacts:ro
       - ./serving/models:/app/serving_models
       - ./data:/app/data_pipeline:ro
+      - mlflow_artifacts:/mlflow/artifacts
     depends_on:
       postgres:
         condition: service_healthy
@@ -145,6 +148,9 @@ services:
       CHECK_INTERVAL_SECONDS: "300"
       ERROR_RATE_THRESHOLD: "0.05"
       CORRECTION_RATE_THRESHOLD: "0.65"
+    volumes:
+      - mlflow_artifacts:/mlflow/artifacts
+      - ./serving/models:/serving_models
     depends_on:
       - serving
       - prometheus
@@ -214,7 +220,7 @@ services:
       - --output-dir
       - /app/artifacts/versions
       - --version
-      - v14
+      - v6
 
   drift-monitor:
     build:
@@ -229,11 +235,11 @@ services:
         condition: service_healthy
     command:
       - --baseline
-      - /app/artifacts/versions/v14_taxonomy_4class/train.parquet
+      - /app/artifacts/versions/v6/train_llm_merged_ops.parquet
       - --output
       - /app/artifacts/drift_report.json
       - --version
-      - v14
+      - v6
       - --interval
       - "3600"
 

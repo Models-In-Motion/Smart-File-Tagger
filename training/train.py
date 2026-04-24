@@ -218,7 +218,6 @@ def resolve_data_paths(cfg: dict[str, Any]) -> tuple[str, str | None]:
     train_path = resolve_train_data_path(data_cfg)
     eval_path = resolve_eval_data_path(data_cfg) if data_cfg.get("eval_path") else None
     return train_path, eval_path
-    )
 
 
 def load_filtered_frame(
@@ -750,14 +749,18 @@ def main() -> None:
 
             # Auto-promote newly registered models to Staging.
             try:
-                version = getattr(result, "registered_model_version", None) or getattr(result, "version", None)
-                if version is not None:
-                    from model_registry import promote_to_staging
-
+                from model_registry import promote_to_staging
+                import mlflow
+                # Query MLflow directly for the latest version instead of
+                # relying on the return value (attribute names vary by version)
+                client = mlflow.tracking.MlflowClient()
+                versions = client.get_latest_versions("smart-tagger", stages=["None"])
+                if versions:
+                    version = versions[0].version
                     promote_to_staging(str(version))
                     print(f"Model version {version} auto-promoted to Staging.", flush=True)
                 else:
-                    print("Could not determine registered model version for auto-promotion.", flush=True)
+                    print("Could not find newly registered model version.", flush=True)
             except Exception as exc:
                 print(f"Auto-promotion to Staging failed: {exc}", flush=True)
 

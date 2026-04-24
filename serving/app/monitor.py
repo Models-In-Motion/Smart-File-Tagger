@@ -267,6 +267,8 @@ def get_model_artifact_path(run_id: str) -> str | None:
     Gets the local path to model_bundle.joblib for a given MLflow run.
     The artifact is stored in the mlflow volume mounted at /mlflow/artifacts.
     """
+    import os
+    os.makedirs("/tmp/mlflow_artifacts", exist_ok=True)
     try:
         import mlflow
         mlflow.set_tracking_uri(MLFLOW_URL)
@@ -277,7 +279,12 @@ def get_model_artifact_path(run_id: str) -> str | None:
             path="bundle/model_bundle.joblib",
             dst_path="/tmp/mlflow_artifacts",
         )
-        return local_path
+        # Copy to shared serving models directory so serving container can access it
+        import shutil
+        serving_path = "/serving_models/model_bundle.joblib"
+        shutil.copy2(local_path, serving_path)
+        log.info(f"Copied new model to {serving_path}")
+        return serving_path
     except Exception as exc:
         log.warning(f"Could not download model artifact for run {run_id}: {exc}")
         return None
@@ -390,7 +397,7 @@ def run_promotion_check():
 
         if canary_passed:
             log.info(f"Canary PASSED for version {version} — promoting to Production")
-            success = load_new_model(bundle_path)
+            success = load_new_model("/models/model_bundle.joblib")
             if success:
                 promote_model_to_production(version)
                 log.info(f"Version {version} promoted and loaded successfully")
