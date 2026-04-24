@@ -330,12 +330,24 @@ def run_rollback_check():
             rollback_reason = f"error_rate={error_rate:.1%} exceeds threshold={ERROR_RATE_THRESHOLD:.1%}"
             rollback_triggered = True
 
-    # Check 2 — correction rate
+    # Check 2 — correction rate (minimum 10 feedback events required)
     if not rollback_triggered:
         correction_rate = get_correction_rate_last_n(100)
         if correction_rate is not None:
             log.info(f"Correction rate (last 100): {correction_rate:.1%}")
-            if correction_rate > CORRECTION_RATE_THRESHOLD:
+            # Get total feedback count to enforce minimum sample size
+            try:
+                import psycopg2
+                conn = psycopg2.connect(DB_URL)
+                cur = conn.cursor()
+                cur.execute("SELECT COUNT(*) FROM feedback")
+                total_feedback = cur.fetchone()[0]
+                conn.close()
+            except:
+                total_feedback = 0
+            if total_feedback < 10:
+                log.info(f"Skipping correction rate check — only {total_feedback} feedback events (minimum 10 required)")
+            elif correction_rate > CORRECTION_RATE_THRESHOLD:
                 rollback_reason = f"correction_rate={correction_rate:.1%} exceeds threshold={CORRECTION_RATE_THRESHOLD:.1%}"
                 rollback_triggered = True
 

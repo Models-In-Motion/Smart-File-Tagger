@@ -41,7 +41,7 @@ log = logging.getLogger(__name__)
 # Minimum cosine similarity to consider a custom category a match.
 # Below this threshold, the custom category is ignored and the fixed
 # baseline classifier takes over.
-CUSTOM_CATEGORY_THRESHOLD = 0.30
+CUSTOM_CATEGORY_THRESHOLD = 0.60
 
 
 # ---------------------------------------------------------------------------

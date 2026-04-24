@@ -299,9 +299,19 @@
 
     // ── Init ─────────────────────────────────────────────────────────────────
 
-    document.addEventListener('DOMContentLoaded', function() {
+    function startPolling() {
         setInterval(poll, 1000);
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        // Delay start to let Nextcloud Vue app initialize
+        setTimeout(startPolling, 3000);
         initCategoryManager();
+    });
+
+    // Also restart if Nextcloud navigates internally
+    window.addEventListener('load', function() {
+        setTimeout(startPolling, 3000);
     });
 
 })();
