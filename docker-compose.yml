@@ -70,6 +70,7 @@ services:
     environment:
       NEXTCLOUD_ADMIN_USER: admin
       NEXTCLOUD_ADMIN_PASSWORD: admin
+      SQLITE_DATABASE: nextcloud
       NEXTCLOUD_TRUSTED_DOMAINS: localhost nextcloud
       SIDECAR_URL: http://serving:8000
       NEXTCLOUD_INTERNAL_URL: http://nextcloud

@@ -2,13 +2,20 @@
 # Waits for Nextcloud to fully initialize then enables the app
 # Run this after docker-compose up
 
-CONTAINER="smart-file-tagger_nextcloud_1"
-MAX_WAIT=120
+set -euo pipefail
+
+CONTAINER="$(docker-compose ps -q nextcloud)"
+MAX_WAIT=600
 WAITED=0
+
+if [ -z "$CONTAINER" ]; then
+    echo "ERROR: nextcloud container is not running"
+    exit 1
+fi
 
 echo "Waiting for Nextcloud to initialize..."
 while [ $WAITED -lt $MAX_WAIT ]; do
-    STATUS=$(curl -s http://localhost:8080/status.php 2>/dev/null)
+    STATUS=$(curl -fsS http://localhost:8080/status.php 2>/dev/null || true)
     if echo "$STATUS" | grep -q '"installed":true'; then
         echo "Nextcloud is ready!"
         break
@@ -20,6 +27,7 @@ done
 
 if [ $WAITED -ge $MAX_WAIT ]; then
     echo "ERROR: Nextcloud did not start in time"
+    docker-compose logs --tail=80 nextcloud || true
     exit 1
 fi
 
@@ -29,7 +37,7 @@ docker exec "$CONTAINER" chown -R www-data:www-data /var/www/html/custom_apps/
 # Enable our app
 docker exec --user www-data "$CONTAINER" php occ app:enable smartfiletagger
 
-docker exec --user www-data smart-file-tagger_nextcloud_1 \
+docker exec --user www-data "$CONTAINER" \
   php occ config:system:set trusted_domains 1 --value=nextcloud
 echo "Trusted domains configured."
 

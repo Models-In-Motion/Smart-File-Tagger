@@ -9,11 +9,12 @@ Pillow==10.2.0               # opens image files
 pytesseract==0.3.10          # OCR — reads text from images (needs tesseract installed)
 
 # ML model
+# Force CPU-only torch wheels to avoid CUDA dependency bloat in Docker builds.
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.2.0+cpu
+torch==2.5.1+cpu
 sentence-transformers==2.3.1 # SBERT — converts text into embeddings
 lightgbm==4.3.0              # the actual classifier
-numpy==1.26.4                 # must match pickle layout (1.26 → ModuleNotFoundError: numpy._core.numeric)
+numpy==1.26.4                # must match pickle layout (1.26 → ModuleNotFoundError: numpy._core.numeric)
 scikit-learn==1.5.2          # NumPy 2–compatible; label encoder + similarity
 
 # Database
