@@ -754,7 +754,8 @@ def main() -> None:
                 # Query MLflow directly for the latest version instead of
                 # relying on the return value (attribute names vary by version)
                 client = mlflow.tracking.MlflowClient()
-                versions = client.get_latest_versions("smart-tagger", stages=["None"])
+                versions = sorted(client.search_model_versions("name='smart-tagger'"), key=lambda v: int(v.version), reverse=True)
+                versions = [v for v in versions if v.current_stage == "None"]
                 if versions:
                     version = versions[0].version
                     promote_to_staging(str(version))
