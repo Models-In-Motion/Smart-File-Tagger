@@ -1,9 +1,7 @@
 data:
-  # Feedback-enriched train set produced by retrain_trigger.py → batch_pipeline.py.
-  # Falls back to Run B base if the enriched file hasn't been generated yet.
-  path: /app/data_artifacts/versions/v6/train_llm.parquet
-  fallback_path: /app/data_artifacts/versions/v6/train_llm.parquet
-  eval_path: /app/data_artifacts/versions/v6/eval_llm.parquet
+  # Docker path — used when running via docker-compose on Chameleon
+  path: /app/data_artifacts/versions/v6/train_llm_merged_ops.parquet
+  eval_path: /app/data_artifacts/versions/v6/eval_llm_merged_ops.parquet
   text_col: extracted_text
   label_col: llm_label_merged
   allowed_labels:
