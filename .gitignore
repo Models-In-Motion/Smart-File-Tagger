@@ -64,3 +64,6 @@ data/artifacts/courses/
 # Training outputs (keep dirs via training/artifacts/**/.gitkeep; do not commit bundles)
 training/artifacts/**/*.joblib
 training/artifacts/**/metrics_summary.json
+serving/.venv_host/
+serving/.venv/
+**/.venv*/
