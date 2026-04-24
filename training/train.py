@@ -41,6 +41,13 @@ SUPPORTED_MODELS = {
     "sbert_mlp",
 }
 
+V6_DATA_ROOT_CANDIDATES = (
+    Path("/app/data_artifacts/versions/v6"),
+    Path(__file__).resolve().parent.parent / "data/artifacts/versions/v6",
+    Path.cwd() / "data/artifacts/versions/v6",
+    Path.cwd() / "../data/artifacts/versions/v6",
+)
+
 
 @dataclass
 class SplitData:
@@ -148,33 +155,69 @@ def sync_bundle_to_serving(artifact_path: Path) -> Path:
     return dest
 
 
-def resolve_train_data_path(data_cfg: dict[str, Any]) -> str:
-    """Resolve training parquet path with a fallback for first-time retrain runs."""
-    primary_path = str(data_cfg["path"])
-    if Path(primary_path).exists():
-        return primary_path
+def resolve_v6_data_path(path: str) -> str:
+    """Always load datasets from data/artifacts/versions/v6 by filename."""
+    filename = Path(path).name
+    if not filename:
+        raise ValueError(f"Invalid dataset path: {path}")
 
-    fallback_candidates: list[str] = []
-    explicit_fallback = data_cfg.get("fallback_path")
-    if explicit_fallback:
-        fallback_candidates.append(str(explicit_fallback))
+    for root in V6_DATA_ROOT_CANDIDATES:
+        candidate = root / filename
+        if candidate.exists():
+            return str(candidate)
 
-    feedback_name = "run_b_train_with_feedback.parquet"
-    base_name = "run_b_train_llm_merged_ops.parquet"
-    if primary_path.endswith(feedback_name):
-        fallback_candidates.append(primary_path.replace(feedback_name, base_name))
-
-    for fallback_path in fallback_candidates:
-        if Path(fallback_path).exists():
-            print(
-                f"[WARN] Training data not found at '{primary_path}'. "
-                f"Falling back to '{fallback_path}'.",
-                flush=True,
-            )
-            return fallback_path
-
+    searched = ", ".join(str(root / filename) for root in V6_DATA_ROOT_CANDIDATES)
     raise FileNotFoundError(
-        f"Training data not found at '{primary_path}', and no valid fallback was found."
+        f"Could not find '{filename}' under data/artifacts/versions/v6. "
+        f"Searched: {searched}"
+    )
+
+
+def resolve_train_data_path(data_cfg: dict[str, Any]) -> str:
+    """Resolve training parquet path from v6 with optional fallback by filename."""
+    primary_path = str(data_cfg["path"])
+    try:
+        return resolve_v6_data_path(primary_path)
+    except FileNotFoundError:
+        fallback_candidates: list[str] = []
+        explicit_fallback = data_cfg.get("fallback_path")
+        if explicit_fallback:
+            fallback_candidates.append(str(explicit_fallback))
+
+        feedback_name = "run_b_train_with_feedback.parquet"
+        base_name = "run_b_train_llm_merged_ops.parquet"
+        if Path(primary_path).name == feedback_name:
+            fallback_candidates.append(str(Path(primary_path).with_name(base_name)))
+
+        for fallback_path in fallback_candidates:
+            try:
+                resolved_fallback = resolve_v6_data_path(fallback_path)
+                print(
+                    f"[WARN] Training data not found at '{primary_path}'. "
+                    f"Falling back to '{resolved_fallback}'.",
+                    flush=True,
+                )
+                return resolved_fallback
+            except FileNotFoundError:
+                continue
+
+        raise FileNotFoundError(
+            f"Training data not found under data/artifacts/versions/v6 for '{primary_path}'."
+        )
+
+
+def resolve_eval_data_path(data_cfg: dict[str, Any]) -> str:
+    eval_path = data_cfg.get("eval_path")
+    if not eval_path:
+        return ""
+    return resolve_v6_data_path(str(eval_path))
+
+
+def resolve_data_paths(cfg: dict[str, Any]) -> tuple[str, str | None]:
+    data_cfg = cfg["data"]
+    train_path = resolve_train_data_path(data_cfg)
+    eval_path = resolve_eval_data_path(data_cfg) if data_cfg.get("eval_path") else None
+    return train_path, eval_path
     )
 
 
@@ -184,12 +227,13 @@ def load_filtered_frame(
     label_col: str,
     allowed_labels: list[str] | None = None,
 ) -> pd.DataFrame:
-    df = pd.read_parquet(path)
+    resolved_path = resolve_v6_data_path(path)
+    df = pd.read_parquet(resolved_path)
 
     if text_col not in df.columns:
-        raise ValueError(f"text_col '{text_col}' not found in data at path: {path}")
+        raise ValueError(f"text_col '{text_col}' not found in data at path: {resolved_path}")
     if label_col not in df.columns:
-        raise ValueError(f"label_col '{label_col}' not found in data at path: {path}")
+        raise ValueError(f"label_col '{label_col}' not found in data at path: {resolved_path}")
 
     selected_columns = [text_col, label_col]
     if "source" in df.columns:
@@ -207,7 +251,7 @@ def load_filtered_frame(
         df = df[df[label_col].isin(allowed_labels)]
 
     if df.empty:
-        raise ValueError(f"No rows left after filtering for path: {path}")
+        raise ValueError(f"No rows left after filtering for path: {resolved_path}")
 
     return df
 
@@ -601,6 +645,8 @@ def main() -> None:
         "label_col": cfg["data"]["label_col"],
     }
     joblib.dump(bundle, artifact_path)
+    serving_bundle_path = sync_bundle_to_serving(artifact_path)
+    print(f"Synced serving bundle to {serving_bundle_path}", flush=True)
 
     runtime_metrics["model_artifact_size_bytes"] = int(artifact_path.stat().st_size)
 

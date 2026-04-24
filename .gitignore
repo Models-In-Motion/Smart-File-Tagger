@@ -54,6 +54,11 @@ artifacts/production_feedback.jsonl
 data/artifacts/*.parquet
 data/artifacts/*.jsonl
 data/artifacts/*.json
+data/artifacts/versions/*
+!data/artifacts/versions/v6/
+data/artifacts/versions/v6/*
+!data/artifacts/versions/v6/train_llm_merged_ops.parquet
+!data/artifacts/versions/v6/eval_llm_merged_ops.parquet
 data/artifacts/courses/
 
 # Training outputs (keep dirs via training/artifacts/**/.gitkeep; do not commit bundles)
