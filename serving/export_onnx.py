@@ -86,7 +86,6 @@ with torch.no_grad():
         },
         opset_version       = 17,
         do_constant_folding = True,
-        dynamo              = False,   # force legacy exporter — exports full weights
     )
 print(f"  Saved: {onnx_path} ({onnx_path.stat().st_size / 1024 / 1024:.1f} MB)")
 

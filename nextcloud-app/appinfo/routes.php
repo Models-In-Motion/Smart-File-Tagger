@@ -7,6 +7,7 @@ return [
         ['name' => 'tag#suggestion',    'url' => '/suggestion/{fileId}',    'verb' => 'GET'],
         ['name' => 'tag#confirm',       'url' => '/confirm',                'verb' => 'POST'],
         ['name' => 'tag#reject',        'url' => '/reject',                 'verb' => 'POST'],
+        ['name' => 'tag#manualTag',     'url' => '/manual-tag',             'verb' => 'POST'],
         // Category manager page
         ['name' => 'category#index',    'url' => '/categories',             'verb' => 'GET'],
         // Category list API endpoint

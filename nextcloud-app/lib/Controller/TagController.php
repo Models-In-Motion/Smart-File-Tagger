@@ -258,6 +258,43 @@ class TagController extends Controller {
      * @NoAdminRequired
      * @NoCSRFRequired
      */
+    public function manualTag(): JSONResponse {
+        $user   = $this->userSession->getUser();
+        $userId = $user ? $user->getUID() : '';
+        $fileId = (string)$this->request->getParam('fileId', '');
+        $tag    = (string)$this->request->getParam('tag', '');
+
+        if ($fileId === '' || $tag === '' || $userId === '') {
+            return new JSONResponse(['success' => false, 'error' => 'Missing fileId, tag, or user'], 400);
+        }
+
+        $this->applyTag($fileId, $tag);
+
+        $this->callSidecarJson('/feedback', [
+            'file_id'       => $fileId,
+            'user_id'       => $userId,
+            'predicted_tag' => '',
+            'confidence'    => 0.0,
+            'action_taken'  => 'no_tag',
+            'feedback_type' => 'corrected',
+            'corrected_tag' => $tag,
+            'model_version' => 'tfidf_lightgbm_bundle',
+        ]);
+
+        error_log("SmartFileTagger manual tag '{$tag}' applied to file {$fileId} by {$userId}");
+
+        return new JSONResponse([
+            'success' => true,
+            'file_id' => $fileId,
+            'tag'     => $tag,
+            'message' => "Tag '{$tag}' applied successfully",
+        ]);
+    }
+
+    /**
+     * @NoAdminRequired
+     * @NoCSRFRequired
+     */
     public function reject(): JSONResponse {
         $fileId     = (string)$this->request->getParam('fileId');
         $tag        = (string)$this->request->getParam('tag');

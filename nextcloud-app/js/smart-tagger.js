@@ -81,31 +81,43 @@
                 </div>
             `;
 
-        // Inject into sidebar — try multiple selectors for NC 27 compatibility
-        const targets = [
-            '#app-sidebar-vue .app-sidebar-header',
-            '#app-sidebar .app-sidebar-header',
-            '.app-sidebar-header',
-            '#app-sidebar',
-        ];
-        let injected = false;
-        for (const sel of targets) {
-            const el = document.querySelector(sel);
-            if (el) {
-                el.parentNode.insertBefore(banner, el.nextSibling);
-                injected = true;
-                break;
+        // Inject before the manual tag panel if it's already in the DOM,
+        // otherwise fall back to the standard sidebar header targets.
+        const manualPanel = document.getElementById('sft-manual-panel-' + fileId);
+        if (manualPanel) {
+            manualPanel.parentNode.insertBefore(banner, manualPanel);
+        } else {
+            const targets = [
+                '#app-sidebar-vue .app-sidebar-header',
+                '#app-sidebar .app-sidebar-header',
+                '.app-sidebar-header',
+                '#app-sidebar-vue',
+                '#app-sidebar',
+            ];
+            let injected = false;
+            for (const sel of targets) {
+                const el = document.querySelector(sel);
+                if (el) {
+                    el.parentNode.insertBefore(banner, el.nextSibling);
+                    injected = true;
+                    break;
+                }
             }
-        }
-        if (!injected) {
-            // Last resort: fixed position overlay
-            banner.style.cssText = 'position:fixed;top:70px;right:20px;z-index:9999;background:#fff;border:1px solid #ccc;padding:12px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.15);max-width:300px;';
-            document.body.appendChild(banner);
+            if (!injected) {
+                banner.style.cssText = 'position:fixed;top:70px;right:20px;z-index:9999;background:#fff;border:1px solid #ccc;padding:12px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.15);max-width:300px;';
+                document.body.appendChild(banner);
+            }
         }
 
         if (isSuggested) {
             document.getElementById('sft-confirm-' + fileId).addEventListener('click', () => handleConfirm(fileId, data.tag));
             document.getElementById('sft-reject-' + fileId).addEventListener('click', () => handleReject(fileId, data.tag));
+        }
+
+        // Hide manual tag panel while a suggestion is pending — user should Accept/Reject first.
+        const existingManualPanel = document.getElementById('sft-manual-panel-' + fileId);
+        if (existingManualPanel) {
+            existingManualPanel.style.display = 'none';
         }
 
         // Keep the UI clean: auto-dismiss after a few seconds.
@@ -134,6 +146,9 @@
                 `;
                 setTimeout(() => removeBanner(fileId), 5000);
             }
+            // Tag accepted — manual panel is no longer needed for this file.
+            const manualPanel = document.getElementById('sft-manual-panel-' + fileId);
+            if (manualPanel) manualPanel.remove();
             refreshFilesView(150);
         })
         .catch(() => {});
@@ -150,7 +165,9 @@
         })
         .then(() => {
             removeBanner(fileId);
-            // Show Nextcloud notification
+            // Suggestion rejected — reveal the manual tag panel so the user can pick another label.
+            const manualPanel = document.getElementById('sft-manual-panel-' + fileId);
+            if (manualPanel) manualPanel.style.display = '';
             if (window.OC && OC.Notification) {
                 OC.Notification.showTemporary('Feedback saved.');
             }
@@ -163,44 +180,77 @@
     // Nextcloud 27 uses a Vue-based sidebar — watch for DOM changes
 
     function watchSidebar() {
-        function checkUrl() {
-            const urlParams = new URLSearchParams(window.location.search);
-            const fileId = urlParams.get('openfile') || urlParams.get('fileid');
-            if (fileId && fileId !== window._sftLastFileId) {
-                window._sftLastFileId = fileId;
-                // Small delay to let sidebar DOM render
-                setTimeout(function() {
-                    loadSuggestion(fileId);
-                }, 800);
-            }
-        }
-
-        // Check on load
-        checkUrl();
-
-        // Watch URL changes (Nextcloud uses pushState)
-        const originalPushState = history.pushState;
-        history.pushState = function() {
-            originalPushState.apply(history, arguments);
-            setTimeout(checkUrl, 100);
-        };
-
-        const originalReplaceState = history.replaceState;
-        history.replaceState = function() {
-            originalReplaceState.apply(history, arguments);
-            setTimeout(checkUrl, 100);
-        };
-
-        window.addEventListener('popstate', checkUrl);
-
-        // Also watch DOM for sidebar appearing
         const observer = new MutationObserver(function() {
-            const sidebar = document.querySelector('#app-sidebar-vue');
-            if (sidebar && sidebar.children.length > 0) {
-                checkUrl();
+            const sidebar = document.querySelector('#app-sidebar-vue, #app-sidebar');
+            if (!sidebar) return;
+
+            // Check if sidebar is visible
+            const isVisible = getComputedStyle(sidebar).display !== 'none' &&
+                             getComputedStyle(sidebar).visibility !== 'hidden';
+
+            if (!isVisible) {
+                document.querySelectorAll('[id^="sft-manual-panel-"]').forEach(el => el.remove());
+                document.querySelectorAll('[id^="sft-banner-"]').forEach(el => el.remove());
+                window._sftLastFileId = null;
+                return;
+            }
+
+            // Try to get file ID from the sidebar DOM
+            const fileId = getFileIdFromDOM();
+            if (!fileId) return;
+
+            if (fileId !== window._sftLastFileId) {
+                window._sftLastFileId = fileId;
+                document.querySelectorAll('[id^="sft-manual-panel-"]').forEach(el => el.remove());
+                document.querySelectorAll('[id^="sft-banner-"]').forEach(el => el.remove());
+                loadSuggestion(fileId);
+                renderManualTagPanel(fileId);
             }
         });
-        observer.observe(document.body, { childList: true, subtree: true });
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['class', 'style', 'data-file-id', 'data-id']
+        });
+
+        window.addEventListener('popstate', function() {
+            window._sftLastFileId = null;
+            document.querySelectorAll('[id^="sft-manual-panel-"]').forEach(el => el.remove());
+            document.querySelectorAll('[id^="sft-banner-"]').forEach(el => el.remove());
+        });
+    }
+
+    function getFileIdFromDOM() {
+        const sidebar = document.querySelector('#app-sidebar-vue, #app-sidebar');
+        if (!sidebar) return null;
+
+        // Method 1: data attribute directly on sidebar header children
+        const header = sidebar.querySelector('[data-file-id], [data-id], [fileid]');
+        if (header) {
+            return header.dataset.fileId || header.dataset.id || header.getAttribute('fileid') || null;
+        }
+
+        // Method 2: active/selected row in the file list
+        const activeRow = document.querySelector('.files-list__row--active, tr.selected');
+        if (activeRow) {
+            return activeRow.dataset.id || activeRow.getAttribute('data-id') || null;
+        }
+
+        // Method 3: any element inside sidebar carrying a file id
+        const withFileId = sidebar.querySelector('[data-fileid], [data-file-id]');
+        if (withFileId) {
+            return withFileId.dataset.fileid || withFileId.dataset.fileId || null;
+        }
+
+        // Method 4: focused/hovered row in the file list table
+        const selectedRow = document.querySelector('tr[data-id].mouseOver, tr[data-id]:focus-within');
+        if (selectedRow) {
+            return selectedRow.dataset.id || null;
+        }
+
+        return null;
     }
 
     function watchFileUploads() {
@@ -279,16 +329,6 @@
         }
     }
 
-    function getFileIdFromSidebar(sidebar) {
-        // Try data attribute
-        const el = sidebar.querySelector('[data-file-id], [data-id]');
-        if (el) return el.dataset.fileId || el.dataset.id;
-        // Try URL params
-        const urlParams = new URLSearchParams(window.location.search);
-        const fileId = urlParams.get('openfile') || urlParams.get('fileid');
-        if (fileId) return fileId;
-        return null;
-    }
 
     // ── Category manager ─────────────────────────────────────────────────────
     // Runs on the /apps/smartfiletagger/categories page
@@ -390,9 +430,114 @@
         setTimeout(init, 500);
     }
 
-    // Also expose globally so we can call manually from console for debugging
+    // Expose globals for manual debugging from the browser console
     window.sftInit = init;
     window.sftLoadSuggestion = loadSuggestion;
     window.sftRenderBanner = renderBanner;
+    window.sftDebug = function() {
+        console.log('Last file ID:', window._sftLastFileId);
+        console.log('getFileIdFromDOM:', getFileIdFromDOM());
+        const sidebar = document.querySelector('#app-sidebar-vue, #app-sidebar');
+        console.log('Sidebar visible:', sidebar ? getComputedStyle(sidebar).display : 'NOT FOUND');
+        if (sidebar) {
+            console.log('Sidebar HTML (first 500 chars):', sidebar.innerHTML.substring(0, 500));
+        }
+    };
+
+    // ── Manual Tag Panel ─────────────────────────────────────────────────────
+    // Shows a dropdown with 5 fixed labels when no tag has been auto-applied.
+    // Appears in the Nextcloud sidebar when a file is clicked.
+
+    const FIXED_LABELS = [
+        'Lecture Notes',
+        'Problem Set',
+        'Exam',
+        'Reading',
+        'Other'
+    ];
+
+    function renderManualTagPanel(fileId) {
+        const existing = document.getElementById('sft-manual-panel-' + fileId);
+        if (existing) existing.remove();
+
+        const panel = document.createElement('div');
+        panel.id = 'sft-manual-panel-' + fileId;
+        panel.className = 'sft-manual-tag-panel';
+        panel.innerHTML = `
+            <div class="sft-manual-header">
+                <span class="sft-icon">🏷️</span>
+                <strong>Assign tag to file #${escapeHtml(fileId)}</strong>
+            </div>
+            <div class="sft-manual-row">
+                <select id="sft-label-select-${fileId}" class="sft-label-select">
+                    <option value="">— Select a label —</option>
+                    ${FIXED_LABELS.map(l => `<option value="${escapeHtml(l)}">${escapeHtml(l)}</option>`).join('')}
+                </select>
+                <button class="sft-btn sft-btn-confirm" id="sft-manual-apply-${fileId}">
+                    Apply
+                </button>
+            </div>
+            <div id="sft-manual-result-${fileId}" class="sft-manual-result"></div>
+        `;
+
+        const targets = [
+            '#app-sidebar-vue .app-sidebar-header',
+            '#app-sidebar .app-sidebar-header',
+            '.app-sidebar-header',
+            '#app-sidebar-vue',
+            '#app-sidebar',
+        ];
+        let injected = false;
+        for (const sel of targets) {
+            const el = document.querySelector(sel);
+            if (el) {
+                el.parentNode.insertBefore(panel, el.nextSibling);
+                injected = true;
+                break;
+            }
+        }
+        if (!injected) {
+            panel.style.cssText = 'position:fixed;top:130px;right:20px;z-index:9999;background:#fff;border:1px solid #ccc;padding:12px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.15);max-width:300px;';
+            document.body.appendChild(panel);
+        }
+
+        document.getElementById('sft-manual-apply-' + fileId).addEventListener('click', () => {
+            const select = document.getElementById('sft-label-select-' + fileId);
+            const tag = select.value;
+            if (!tag) {
+                alert('Please select a label first.');
+                return;
+            }
+            applyManualTag(fileId, tag);
+        });
+    }
+
+    function applyManualTag(fileId, tag) {
+        const resultEl = document.getElementById('sft-manual-result-' + fileId);
+        if (resultEl) resultEl.innerHTML = '<em>Applying...</em>';
+
+        fetch(OC.generateUrl('/apps/smartfiletagger/manual-tag'), {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'requesttoken': OC.requestToken
+            },
+            body: 'fileId=' + encodeURIComponent(fileId) + '&tag=' + encodeURIComponent(tag)
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                const panel = document.getElementById('sft-manual-panel-' + fileId);
+                if (panel) {
+                    panel.innerHTML = `<div class="sft-confirmed">✅ Tag applied: <strong>${escapeHtml(tag)}</strong></div>`;
+                }
+            } else {
+                if (resultEl) resultEl.innerHTML = '<span style="color:red">Failed: ' + escapeHtml(data.error || 'unknown error') + '</span>';
+            }
+        })
+        .catch(() => {
+            if (resultEl) resultEl.innerHTML = '<span style="color:red">Network error. Try again.</span>';
+        });
+    }
 
 })();

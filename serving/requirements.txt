@@ -9,9 +9,11 @@ Pillow==10.2.0               # opens image files
 pytesseract==0.3.10          # OCR — reads text from images (needs tesseract installed)
 
 # ML model
-sentence-transformers==2.6.1 # SBERT — converts text into embeddings
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.2.0+cpu
+sentence-transformers==2.3.1 # SBERT — converts text into embeddings
 lightgbm==4.3.0              # the actual classifier
-numpy==2.0.2                 # must match pickle layout (1.26 → ModuleNotFoundError: numpy._core.numeric)
+numpy==1.26.4                 # must match pickle layout (1.26 → ModuleNotFoundError: numpy._core.numeric)
 scikit-learn==1.5.2          # NumPy 2–compatible; label encoder + similarity
 
 # Database
@@ -29,5 +31,5 @@ gunicorn==21.2.0
 prometheus-fastapi-instrumentator==6.1.0  # auto-instruments FastAPI with request metrics
 prometheus-client==0.20.0                 # exposes custom counters and histograms
 
-# mlflow<2.16 pins numpy<2, which conflicts with numpy==2.0.2 above (joblib bundle).
+# mlflow<2.16 pins numpy<2, which conflicts with numpy==1.26.4 above (joblib bundle).
 mlflow==2.16.2

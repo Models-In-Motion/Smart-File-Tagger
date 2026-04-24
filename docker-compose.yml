@@ -108,7 +108,7 @@ services:
   retrain-cron:
     build:
       context: ./training
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.retrain
     environment:
       DB_URL: postgresql://tagger:tagger@postgres:5432/tagger
       MLFLOW_TRACKING_URI: http://mlflow:5000
@@ -135,7 +135,7 @@ services:
   monitor:
     build:
       context: ./serving
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.monitor
     environment:
       DB_URL: postgresql://tagger:tagger@postgres:5432/tagger
       MLFLOW_TRACKING_URI: http://mlflow:5000
@@ -143,7 +143,7 @@ services:
       PROMETHEUS_URL: http://prometheus:9090
       CHECK_INTERVAL_SECONDS: "300"
       ERROR_RATE_THRESHOLD: "0.05"
-      CORRECTION_RATE_THRESHOLD: "0.40"
+      CORRECTION_RATE_THRESHOLD: "0.65"
     depends_on:
       - serving
       - prometheus
