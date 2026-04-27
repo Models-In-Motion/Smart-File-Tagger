@@ -67,3 +67,10 @@ training/artifacts/**/metrics_summary.json
 serving/.venv_host/
 serving/.venv/
 **/.venv*/
+
+# Bind mount data directories — live runtime data, not for git
+data/postgres/
+data/grafana/
+data/nextcloud/
+data/mlflow_artifacts/
+data/tagger_backup.sql
