@@ -245,9 +245,10 @@
                     loadCategoryList();
                     showToast('Category created successfully.');
                 } else {
-                    alert('Failed: ' + (data.message || data.error));
+                    alert('Failed: ' + (data.message || data.error || JSON.stringify(data)));
                 }
-            });
+            })
+            .catch(err => alert('Request failed: ' + err));
         });
     }
 

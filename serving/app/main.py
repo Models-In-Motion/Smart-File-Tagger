@@ -554,3 +554,22 @@ def _null_prediction(file_id: str, user_id: str) -> JSONResponse:
 def _now_iso() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
+
+@app.get("/extracted-text/{file_id}")
+def get_extracted_text(file_id: str, user_id: str = "admin"):
+    """Return already-extracted text for a file from the predictions table."""
+    try:
+        from feedback import get_db_connection
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT extracted_text FROM predictions WHERE file_id = %s AND user_id = %s ORDER BY created_at DESC LIMIT 1",
+            (file_id, user_id)
+        )
+        row = cur.fetchone()
+        conn.close()
+        if row and row[0]:
+            return {"success": True, "extracted_text": row[0]}
+        return {"success": False, "message": f"No extracted text found for file {file_id}"}
+    except Exception as exc:
+        return {"success": False, "message": str(exc)}

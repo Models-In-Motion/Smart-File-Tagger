@@ -74,10 +74,17 @@ class CategoryController extends Controller {
         // This is more reliable than resolving file IDs via OCS + WebDAV.
         $exampleTexts = [];
         foreach ($exampleFileIds as $fileId) {
-            $text = $this->readTextFromFileId($userId, $fileId);
-            if ($text !== null && strlen($text) > 10) {
-                // Keep examples compact for category prototype creation.
-                $exampleTexts[] = mb_substr($text, 0, 1000);
+            // First try to get already-extracted text from the predictions DB via FastAPI.
+            // This avoids re-reading raw PDF binary which is slow and binary garbage for SBERT.
+            $extracted = $this->sidecarGet('/extracted-text/' . urlencode($fileId) . '?user_id=' . urlencode($userId));
+            if ($extracted && !empty($extracted['extracted_text']) && strlen($extracted['extracted_text']) > 10) {
+                $exampleTexts[] = mb_substr(mb_convert_encoding($extracted['extracted_text'], 'UTF-8', 'UTF-8'), 0, 1000);
+            } else {
+                // Fall back to reading raw file content if not in predictions DB.
+                $text = $this->readTextFromFileId($userId, $fileId);
+                if ($text !== null && strlen($text) > 10) {
+                    $exampleTexts[] = mb_substr(mb_convert_encoding($text, 'UTF-8', 'UTF-8'), 0, 1000);
+                }
             }
         }
 
