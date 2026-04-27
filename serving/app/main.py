@@ -574,3 +574,24 @@ def get_extracted_text(file_id: str, user_id: str = "admin"):
         return {"success": False, "message": f"No extracted text found for file {file_id}"}
     except Exception as exc:
         return {"success": False, "message": str(exc)}
+
+
+class PredictTextRequest(BaseModel):
+    user_id: str
+    file_id: str
+    text: str
+
+@app.post("/predict-text")
+def predict_text_endpoint(request: PredictTextRequest):
+    """Predict label for already-extracted text (used for retroactive tagging)."""
+    if predictor is None:
+        raise HTTPException(status_code=503, detail="Model not loaded yet")
+    try:
+        result = predictor.predict(text=request.text, user_id=request.user_id)
+        return {
+            "predicted_tag": result.get("predicted_tag", ""),
+            "confidence": result.get("confidence", 0.0),
+            "action": result.get("action", "no_tag"),
+        }
+    except Exception as exc:
+        return {"predicted_tag": "", "confidence": 0.0, "action": "no_tag", "error": str(exc)}

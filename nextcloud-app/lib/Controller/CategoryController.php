@@ -102,6 +102,31 @@ class CategoryController extends Controller {
         ];
 
         $response = $this->sidecarPost('/register-category', $payload);
+        if (!empty($response['success'])) {
+            // Retroactively apply the new category tag to the example files
+            foreach ($exampleFileIds as $fileId) {
+                $extracted = $this->sidecarGet('/extracted-text/' . urlencode($fileId) . '?user_id=' . urlencode($userId));
+                if (empty($extracted['extracted_text'])) continue;
+
+                // Re-run prediction now that category exists
+                $predictPayload = [
+                    'user_id'  => $userId,
+                    'file_id'  => $fileId,
+                    'text'     => mb_substr($extracted['extracted_text'], 0, 1000),
+                ];
+                $prediction = $this->sidecarPost('/predict-text', $predictPayload);
+                if (!empty($prediction['predicted_tag']) && $prediction['predicted_tag'] === $categoryName) {
+                    // Remove any existing suggested tag and apply the confirmed category tag
+                    // We use the tag mapper directly via the file ID
+                    try {
+                        $tag = $this->tagManager->createTag($categoryName, true, true);
+                        $this->tagMapper->assignTags((string)$fileId, 'files', [$tag->getId()]);
+                    } catch (\Throwable $e) {
+                        // Tag might already exist or assignment might fail — not critical
+                    }
+                }
+            }
+        }
         return new JSONResponse($response ?? ['success' => false, 'error' => 'Sidecar unavailable']);
     }
 

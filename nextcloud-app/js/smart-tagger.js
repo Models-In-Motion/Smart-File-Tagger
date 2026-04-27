@@ -88,6 +88,7 @@
         .then(() => {
             removeBanners();
             showToast('✅ Tag applied: ' + tag);
+            if (OCA && OCA.Files && OCA.Files.App && OCA.Files.App.getCurrentFileList) { OCA.Files.App.getCurrentFileList().reload(); }
         })
         .catch(() => {});
     }
@@ -104,6 +105,7 @@
         .then(() => {
             removeBanners();
             showToast('Feedback saved.');
+            if (OCA && OCA.Files && OCA.Files.App && OCA.Files.App.getCurrentFileList) { OCA.Files.App.getCurrentFileList().reload(); }
         })
         .catch(() => {});
     }
@@ -154,6 +156,7 @@
             if (data.success) {
                 removeManualPanels();
                 showToast('✅ Tag applied: ' + tag);
+                if (OCA && OCA.Files && OCA.Files.App && OCA.Files.App.getCurrentFileList) { OCA.Files.App.getCurrentFileList().reload(); }
             } else {
                 const result = document.getElementById('sft-manual-result-' + fileId);
                 if (result) result.innerHTML = '<span style="color:red">Failed: ' + escapeHtml(data.error || 'unknown') + '</span>';
@@ -300,8 +303,27 @@
 
     // ── Init ─────────────────────────────────────────────────────────────────
 
+    function reloadFileList() {
+        if (OCA && OCA.Files && OCA.Files.App && OCA.Files.App.getCurrentFileList) {
+            OCA.Files.App.getCurrentFileList().reload();
+        }
+    }
+
+    // After a file is uploaded, the tag is applied asynchronously by the webhook.
+    // Poll the file count — if it increases, reload after 4 seconds to show new tags.
+    let lastFileCount = 0;
+    function pollFileCount() {
+        const rows = document.querySelectorAll('tr.file-row, tr[data-id]');
+        const count = rows.length;
+        if (count > lastFileCount && lastFileCount > 0) {
+            setTimeout(reloadFileList, 2000);
+        }
+        lastFileCount = count;
+    }
+
     function startPolling() {
         setInterval(poll, 1000);
+        setInterval(pollFileCount, 2000);
     }
 
     document.addEventListener('DOMContentLoaded', function() {

@@ -113,6 +113,14 @@ class TagController extends Controller {
             }
 
             $fileName = (string)($node['name'] ?? basename($filePath));
+            $nodeType = (string)($node['type'] ?? '');
+
+            // Skip folders — only process files
+            if ($nodeType === 'directory' || $nodeType === 'folder' ||
+                str_ends_with(rtrim($filePath, '/'), '') && !str_contains($fileName, '.')) {
+                error_log("SmartFileTagger skipping non-file node: {$fileName} type={$nodeType}");
+                return new JSONResponse(['success' => true, 'skipped' => true, 'reason' => 'directory']);
+            }
 
             if ($fileId === '' || $filePath === '' || $userId === '') {
                 return new JSONResponse([
