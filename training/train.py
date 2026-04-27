@@ -60,7 +60,7 @@ class SplitData:
     sample_weight_train: np.ndarray | None = None
 
 
-CORE_LABELS = ["Lecture Notes", "Other", "Problem Set", "Exam", "Reading"]
+CORE_LABELS = ["Lecture Notes", "Problem Set", "Exam", "Reading"]
 
 
 def compute_sample_weights(sources: pd.Series | None) -> np.ndarray | None:
@@ -90,6 +90,11 @@ def parse_args() -> argparse.Namespace:
         help="MLflow experiment name override",
     )
     parser.add_argument("--run-name", default=None, help="Optional MLflow run name")
+    parser.add_argument(
+        "--data-path",
+        default=None,
+        help="Override data path from config (e.g. feedback-enriched parquet)",
+    )
     parser.add_argument(
         "--output-dir",
         default="artifacts",
@@ -176,6 +181,10 @@ def resolve_v6_data_path(path: str) -> str:
 def resolve_train_data_path(data_cfg: dict[str, Any]) -> str:
     """Resolve training parquet path from v6 with optional fallback by filename."""
     primary_path = str(data_cfg["path"])
+    # If an absolute path is given and the file exists, use it directly
+    # without going through v6 resolution (e.g. feedback-enriched parquet)
+    if Path(primary_path).is_absolute() and Path(primary_path).exists():
+        return primary_path
     try:
         return resolve_v6_data_path(primary_path)
     except FileNotFoundError:
@@ -226,7 +235,10 @@ def load_filtered_frame(
     label_col: str,
     allowed_labels: list[str] | None = None,
 ) -> pd.DataFrame:
-    resolved_path = resolve_v6_data_path(path)
+    if Path(path).is_absolute() and Path(path).exists():
+        resolved_path = path
+    else:
+        resolved_path = resolve_v6_data_path(path)
     df = pd.read_parquet(resolved_path)
 
     if text_col not in df.columns:
@@ -535,6 +547,11 @@ def main() -> None:
     args = parse_args()
     cfg = load_config(args.config)
 
+    # Override data path from CLI if provided (e.g. feedback-enriched parquet)
+    if hasattr(args, 'data_path') and args.data_path:
+        cfg["data"]["path"] = args.data_path
+        print(f"Data path overridden by --data-path: {args.data_path}", flush=True)
+
     # Prefer CLI, then env (set in docker-compose for in-network MLflow), then config.
     mlflow_uri = (
         args.mlflow_uri
@@ -750,7 +767,6 @@ def main() -> None:
             # Auto-promote newly registered models to Staging.
             try:
                 from model_registry import promote_to_staging
-                import mlflow
                 # Query MLflow directly for the latest version instead of
                 # relying on the return value (attribute names vary by version)
                 client = mlflow.tracking.MlflowClient()

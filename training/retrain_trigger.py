@@ -127,6 +127,8 @@ def trigger_retraining() -> bool:
             "configs/train_docker.yaml",
             "--model",
             "tfidf_lightgbm",
+            "--data-path",
+            FEEDBACK_TRAIN_PATH,
         ],
         check=False,
     )
