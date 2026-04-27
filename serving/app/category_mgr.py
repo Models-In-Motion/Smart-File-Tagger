@@ -48,7 +48,7 @@ CUSTOM_CATEGORY_THRESHOLD = 0.60
 STOPWORDS = {
     "the", "and", "for", "that", "this", "with", "from", "have", "will",
     "your", "are", "not", "but", "all", "can", "been", "their", "which",
-    "when", "were", "they", "class", "classes", "school", "course",
+    "when", "were", "they", "class", "classes", "school", "course", "endobj", "stream", "filter", "length", "flatedecode", "startxref", "trailer", "xref", "author", "title", "creator", "producer", "courseleaf",
 }
 
 
@@ -66,21 +66,15 @@ def _get_connection():
 
 def preprocess_for_sbert(text: str) -> str:
     """
-    Reduce noisy OCR/PDF text before SBERT encoding.
+    Light preprocessing before SBERT encoding.
+    We avoid aggressive filtering because pdfminer produces continuous
+    text without newlines — splitting heuristics tend to cut meaningful
+    phrases and hurt similarity scores more than they help.
+    Just return the text as-is, capped at 500 chars.
     """
     if not text:
         return ""
-
-    meaningful_lines = []
-    for line in text.splitlines():
-        tokens = re.findall(r"[A-Za-z]{4,}", line)
-        if len(tokens) >= 3:
-            meaningful_lines.append(line.strip())
-
-    reduced = "\n".join(meaningful_lines[:50]).strip()
-    if len(reduced) < 50:
-        return text[:500]
-    return reduced
+    return text[:500]
 
 
 def _extract_keywords(example_texts: list[str], limit: int = 10) -> list[str]:
@@ -290,6 +284,7 @@ def find_best_custom_category(
         )
         boost = min(0.15, keyword_hits * 0.03)
         score = sbert_score + boost
+        log.info(f"Category '{category['category_name']}': sbert={sbert_score:.3f} keywords={keyword_hits} boost={boost:.3f} final={score:.3f}")
 
         if score > best_score:
             best_score = score
