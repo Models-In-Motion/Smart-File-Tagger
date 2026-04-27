@@ -30,6 +30,8 @@ Where are prototype vectors stored?
 
 import json
 import logging
+import re
+from collections import Counter
 
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
@@ -42,6 +44,12 @@ log = logging.getLogger(__name__)
 # Below this threshold, the custom category is ignored and the fixed
 # baseline classifier takes over.
 CUSTOM_CATEGORY_THRESHOLD = 0.60
+
+STOPWORDS = {
+    "the", "and", "for", "that", "this", "with", "from", "have", "will",
+    "your", "are", "not", "but", "all", "can", "been", "their", "which",
+    "when", "were", "they", "class", "classes", "school", "course",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -56,6 +64,38 @@ def _get_connection():
     return psycopg2.connect(db_url)
 
 
+def preprocess_for_sbert(text: str) -> str:
+    """
+    Reduce noisy OCR/PDF text before SBERT encoding.
+    """
+    if not text:
+        return ""
+
+    meaningful_lines = []
+    for line in text.splitlines():
+        tokens = re.findall(r"[A-Za-z]{4,}", line)
+        if len(tokens) >= 3:
+            meaningful_lines.append(line.strip())
+
+    reduced = "\n".join(meaningful_lines[:50]).strip()
+    if len(reduced) < 50:
+        return text[:500]
+    return reduced
+
+
+def _extract_keywords(example_texts: list[str], limit: int = 10) -> list[str]:
+    """
+    Pull frequent non-stopword tokens from user examples.
+    """
+    token_counts: Counter[str] = Counter()
+    for text in example_texts:
+        normalized = preprocess_for_sbert(text).lower()
+        words = re.findall(r"[a-z]{5,}", normalized)
+        token_counts.update(word for word in words if word not in STOPWORDS)
+
+    return [word for word, _ in token_counts.most_common(limit)]
+
+
 def ensure_categories_table_exists():
     """
     Creates the custom_categories table if it doesn't exist.
@@ -67,6 +107,7 @@ def ensure_categories_table_exists():
             user_id         TEXT    NOT NULL,
             category_name   TEXT    NOT NULL,
             prototype_vector TEXT   NOT NULL,  -- JSON array of 384 floats
+            keywords        JSONB   NOT NULL DEFAULT '[]'::jsonb,
             example_count   INT     NOT NULL,
             created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
@@ -76,6 +117,9 @@ def ensure_categories_table_exists():
 
         CREATE INDEX IF NOT EXISTS idx_categories_user_id
             ON custom_categories (user_id);
+
+        ALTER TABLE custom_categories
+            ADD COLUMN IF NOT EXISTS keywords JSONB NOT NULL DEFAULT '[]'::jsonb;
     """
     try:
         conn = _get_connection()
@@ -131,8 +175,9 @@ def register_category(
 
     # Step 1 — encode all examples
     log.info(f"Encoding {len(example_texts)} examples for category '{category_name}'")
+    processed_examples = [preprocess_for_sbert(text) for text in example_texts]
     embeddings = sbert_model.encode(
-        example_texts,
+        processed_examples,
         normalize_embeddings=True,
         show_progress_bar=False,
     )
@@ -141,14 +186,16 @@ def register_category(
     # Step 2 — average into prototype vector
     prototype = np.mean(embeddings, axis=0).tolist()
     # prototype is now a Python list of 384 floats
+    keywords = _extract_keywords(example_texts, limit=10)
 
     # Step 3 — store in PostgreSQL
     sql = """
-        INSERT INTO custom_categories (user_id, category_name, prototype_vector, example_count)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO custom_categories (user_id, category_name, prototype_vector, keywords, example_count)
+        VALUES (%s, %s, %s, %s, %s)
         ON CONFLICT (user_id, category_name)
         DO UPDATE SET
             prototype_vector = EXCLUDED.prototype_vector,
+            keywords         = EXCLUDED.keywords,
             example_count    = EXCLUDED.example_count,
             created_at       = NOW()
     """
@@ -164,6 +211,7 @@ def register_category(
                     user_id,
                     category_name,
                     json.dumps(prototype),
+                    json.dumps(keywords),
                     len(example_texts),
                 ))
         conn.close()
@@ -210,12 +258,14 @@ def find_best_custom_category(
         return None, 0.0
 
     # Encode the new document
+    processed_text = preprocess_for_sbert(text)
     doc_embedding = sbert_model.encode(
-        text,
+        processed_text,
         normalize_embeddings=True,
         show_progress_bar=False,
     ).reshape(1, -1)
     # shape: (1, 384)
+    doc_word_set = set(re.findall(r"[a-z]{5,}", text.lower()))
 
     best_name  = None
     best_score = 0.0
@@ -227,7 +277,19 @@ def find_best_custom_category(
         # shape: (1, 384)
 
         # cosine_similarity returns a (1,1) array — get the scalar value
-        score = float(cosine_similarity(doc_embedding, prototype)[0][0])
+        sbert_score = float(cosine_similarity(doc_embedding, prototype)[0][0])
+        stored_keywords = category.get("keywords") or []
+        if isinstance(stored_keywords, str):
+            try:
+                stored_keywords = json.loads(stored_keywords)
+            except Exception:
+                stored_keywords = []
+        keyword_hits = sum(
+            1 for keyword in stored_keywords
+            if isinstance(keyword, str) and keyword.lower() in doc_word_set
+        )
+        boost = min(0.15, keyword_hits * 0.03)
+        score = sbert_score + boost
 
         if score > best_score:
             best_score = score
@@ -293,7 +355,7 @@ def _load_user_categories(user_id: str) -> list[dict]:
     Loads all custom categories (including prototype vectors) for a user.
     """
     sql = """
-        SELECT category_name, prototype_vector, example_count, created_at
+        SELECT category_name, prototype_vector, keywords, example_count, created_at
         FROM custom_categories
         WHERE user_id = %s
         ORDER BY created_at DESC
