@@ -9,7 +9,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ./data/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U tagger"]
       interval: 10s
@@ -21,7 +21,7 @@ services:
     ports:
       - "5001:5000"
     volumes:
-      - mlflow_artifacts:/mlflow/artifacts
+      - ./data/mlflow_artifacts:/mlflow/artifacts
     depends_on:
       postgres:
         condition: service_healthy
@@ -65,7 +65,7 @@ services:
     ports:
       - "8080:80"
     volumes:
-      - nextcloud_data:/var/www/html
+      - ./data/nextcloud:/var/www/html
       - ./nextcloud-app:/var/www/html/custom_apps/smartfiletagger:ro
     environment:
       NEXTCLOUD_ADMIN_USER: admin
@@ -122,7 +122,7 @@ services:
       - ./data/artifacts:/app/data_artifacts:ro
       - ./serving/models:/app/serving_models
       - ./data:/app/data_pipeline:ro
-      - mlflow_artifacts:/mlflow/artifacts
+      - ./data/mlflow_artifacts:/mlflow/artifacts
     depends_on:
       postgres:
         condition: service_healthy
@@ -149,7 +149,7 @@ services:
       ERROR_RATE_THRESHOLD: "0.05"
       CORRECTION_RATE_THRESHOLD: "0.65"
     volumes:
-      - mlflow_artifacts:/mlflow/artifacts
+      - ./data/mlflow_artifacts:/mlflow/artifacts
       - ./serving/models:/serving_models
     depends_on:
       - serving
@@ -299,13 +299,15 @@ services:
     environment:
       GF_SECURITY_ADMIN_PASSWORD: admin
     volumes:
-      - grafana_data:/var/lib/grafana
+      - ./data/grafana:/var/lib/grafana
       - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
     depends_on:
       - prometheus
 
-volumes:
-  postgres_data:
-  mlflow_artifacts:
-  grafana_data:
-  nextcloud_data:
+  adminer:
+    image: adminer
+    ports:
+      - "8081:8080"
+    restart: always
+    depends_on:
+      - postgres
