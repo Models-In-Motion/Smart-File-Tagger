@@ -589,9 +589,10 @@ def predict_text_endpoint(request: PredictTextRequest):
     try:
         result = predictor.predict(text=request.text, user_id=request.user_id)
         return {
-            "predicted_tag": result.get("predicted_tag", ""),
-            "confidence": result.get("confidence", 0.0),
-            "action": result.get("action", "no_tag"),
+            "predicted_tag": result.predicted_tag,
+            "confidence":    result.confidence,
+            "action":        result.action,
+            "model_version": result.model_version,
         }
     except Exception as exc:
         return {"predicted_tag": "", "confidence": 0.0, "action": "no_tag", "error": str(exc)}
