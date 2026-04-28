@@ -20,6 +20,8 @@ PREDICT_URL  = os.getenv("PREDICT_URL",  "http://serving:8000/predict-text")
 FEEDBACK_URL = os.getenv("FEEDBACK_URL", "http://serving:8000/feedback")
 DATA_PATH    = os.getenv("DATA_PATH",    "/app/artifacts/ocw_dataset.parquet")
 DELAY_SECS   = float(os.getenv("DELAY_SECS", "30"))
+VALID_LABELS = ["Lecture Notes", "Problem Set", "Exam", "Reading", "Other"]
+UNSUPPORTED_LABELS = ["Project", "Solution", "Syllabus", "Recitation", "Lab"]
 USER_ID      = os.getenv("USER_ID", "load-generator")
 
 def load_data():
@@ -98,8 +100,14 @@ def main():
 
     while True:
         doc = rng.choice(records)
-        text = str(doc.get("extracted_text", ""))[:1000]
         real_label = str(doc.get("label", "Other"))
+
+        # Skip documents with labels our model doesn't support (no delay)
+        if real_label in UNSUPPORTED_LABELS:
+            time.sleep(1)
+            continue
+
+        text = str(doc.get("extracted_text", ""))[:1000]
         file_id = f"gen_{uuid.uuid4().hex[:12]}"
 
         result = predict(text, USER_ID, file_id)
@@ -113,7 +121,7 @@ def main():
         model_version  = result.get("model_version", "unknown")
 
         # Simulate feedback for all actions except no_tag with very low confidence
-        if action in ("auto_apply", "suggest") or (action == "no_tag" and confidence > 0.2):
+        if action in ("auto_apply", "suggest", "no_tag"):
             feedback_type, corrected_tag = simulate_feedback(
                 predicted_tag, real_label, rng
             )

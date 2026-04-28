@@ -93,7 +93,7 @@ services:
       MLFLOW_TRACKING_URI: http://mlflow:5000
       ARTIFACT_DIR: /app/artifacts
       SERVING_MODEL_BUNDLE_PATH: /app/serving_models/model_bundle.joblib
-      FEEDBACK_THRESHOLD: "200"
+      FEEDBACK_THRESHOLD: "300"
     volumes:
       - ./training/artifacts:/app/artifacts
       - ./data/artifacts:/app/data_artifacts:ro
@@ -116,7 +116,7 @@ services:
       MLFLOW_TRACKING_URI: http://mlflow:5000
       ARTIFACT_DIR: /app/artifacts
       SERVING_MODEL_BUNDLE_PATH: /app/serving_models/model_bundle.joblib
-      FEEDBACK_THRESHOLD: "200"
+      FEEDBACK_THRESHOLD: "300"
     volumes:
       - ./training/artifacts:/app/artifacts
       - ./data/artifacts:/app/data_artifacts:ro
@@ -258,7 +258,7 @@ services:
       PREDICT_URL: http://serving:8000/predict-text
       FEEDBACK_URL: http://serving:8000/feedback
       DATA_PATH: /app/artifacts/ocw_dataset.parquet
-      DELAY_SECS: "120"
+      DELAY_SECS: "30"
       USER_ID: load-generator
     volumes:
       - ./data/artifacts:/app/artifacts
@@ -303,7 +303,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ADMIN_USER: proj29-grafana
+      GF_SECURITY_ADMIN_PASSWORD: proj29-grafana
     volumes:
       - ./data/grafana:/var/lib/grafana
       - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro

@@ -139,11 +139,32 @@ if __name__ == "__main__":
     count = get_unchecked_feedback_count()
     print(f"[retrain_trigger] Unchecked corrections: {count}")
 
-    if count >= FEEDBACK_THRESHOLD:
-        print(
-            f"[retrain_trigger] Threshold reached "
-            f"({count} >= {FEEDBACK_THRESHOLD})"
+    # Time-based fallback: force retraining if last run was > 24 hours ago
+    force_retrain = False
+    try:
+        import psycopg2
+        conn = psycopg2.connect(DB_URL)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT EXTRACT(EPOCH FROM (NOW() - COALESCE(MAX(triggered_at), "
+            "'1970-01-01'::timestamptz))) / 3600 FROM retrain_log"
         )
+        hours_since_last = float(cur.fetchone()[0])
+        conn.close()
+        if hours_since_last >= 24:
+            force_retrain = True
+            print(f"[retrain_trigger] Force retraining — {hours_since_last:.1f}h since last run (>= 24h)")
+    except Exception as e:
+        print(f"[retrain_trigger] Could not check last retrain time: {e}")
+
+    if count >= FEEDBACK_THRESHOLD or force_retrain:
+        if force_retrain and count < FEEDBACK_THRESHOLD:
+            print(f"[retrain_trigger] Time-based trigger (only {count} corrections but 24h elapsed)")
+        else:
+            print(
+                f"[retrain_trigger] Threshold reached "
+                f"({count} >= {FEEDBACK_THRESHOLD})"
+            )
         pipeline_ok = run_batch_pipeline()
         if not pipeline_ok:
             print("[retrain_trigger] Batch pipeline failed — skipping retraining.")
